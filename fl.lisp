@@ -166,37 +166,25 @@
 
 ;;;;------------------------------- Parsers ----------------------------------------
 
+(defparameter *parse-result-no-match* (cons nil nil))
+
 (defclass parser-state ()
   ())
 
 (defmacro parse-result-match-p (result)
-  result)
+  `(not (eq ,result *parse-result-no-match*)))
 
 (defmacro parse-result-no-match-p (result)
-  `(not ,result))
-
-(defmacro parse-result-length (result)
-  `(third ,result))
-
-(defmacro parse-result-position (result)
-  `(second ,result))
+  `(eq ,result *parse-result-no-match*))
 
 (defmacro parse-result-value (result)
-  `(first ,result))
+  result)
 
-(defmacro parse-result-region (result)
-  (with-gensyms (res pos len)
-    `(let* ((,res ,result)
-	   (,pos (parse-result-position ,res)))
-       (make-source-region ,pos (+ ,pos (parse-result-length ,res))))))
-
-(defmacro parse-result-match (value position scanner)
-  (with-gensyms (pos)
-    `(let ((,pos ,position))
-       (list ,value ,pos (- (scanner-position ,scanner) ,pos)))))
+(defmacro parse-result-match (value)
+  value)
 
 (defmacro parse-result-no-match ()
-  nil)
+  '*parse-result-no-match*)
 
 (defun parse-whitespace (scanner state)
   (let ((saved-position (scanner-position scanner)))
@@ -211,7 +199,7 @@
 	     (scanner-read-next scanner)
 	     (return))))
     (if (not (equal saved-position (scanner-position scanner)))
-	(parse-result-match nil saved-position scanner)
+	(parse-result-match nil)
 	(parse-result-no-match))))
 
 (deftest test-parse-whitespace ()
@@ -224,8 +212,7 @@
     (let* ((scanner (make-string-scanner (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab)))
 	   (result (parse-whitespace scanner nil)))
       (and (parse-result-match-p result)
-	   (equal (scanner-position scanner) 4)
-	   (equal (parse-result-length result) 4)))))
+	   (equal (scanner-position scanner) 4)))))
 
 (defun parse-definition ()
   ())
@@ -239,9 +226,8 @@
 (defun parse-modifier (scanner state)
   (let ((saved-position (scanner-position scanner)))
     (cond ((scanner-match-sequence scanner '(#\a #\b #\s #\t #\r #\a #\c #\t))
-	   (parse-result-match (make-instance 'ast-abstract-modifier :source-region (make-source-region saved-position (scanner-position scanner)))
-			       saved-position
-			       scanner))
+	   (parse-result-match
+	    (make-instance 'ast-abstract-modifier :source-region (make-source-region saved-position (scanner-position scanner)))))
 	  (t (parse-result-no-match)))))
 
 (deftest test-parse-modifier ()
@@ -250,7 +236,6 @@
 	   (result (parse-modifier scanner nil)))
       (and (parse-result-match-p result)
 	   (equal (scanner-position scanner) 8)
-	   (equal (parse-result-length result) 8)
 	   (typep (parse-result-value result) 'ast-abstract-modifier)))))
 
 (defsuite test-parsers ()
