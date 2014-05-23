@@ -1,4 +1,13 @@
 
+(in-package :cl-user)
+
+(defpackage :fl
+  (:use :common-lisp)
+  (:export
+   :run-tests))
+
+(in-package :fl)
+
 ;;;;------------------------- Unit Test Framework ---------------------------------
 
 (defvar *test-name* nil)
@@ -110,10 +119,10 @@
     (not (scanner-at-end? (make-string-scanner "foo")))
     (scanner-at-end? (make-string-scanner ""))
     (let ((scanner (make-string-scanner "foo")))
-      (and (equal (scanner-peek-next (make-string-scanner "foo")) #\f)
+      (and (equal (scanner-peek-next scanner) #\f)
 	   (equal (scanner-position scanner) 0)))
     (let ((scanner (make-string-scanner "foo")))
-      (and (equal (scanner-read-next (make-string-scanner "foo")) #\f)
+      (and (equal (scanner-read-next scanner) #\f)
 	   (equal (scanner-position scanner) 1)))))
 
 (defsuite test-scanners ()
@@ -123,26 +132,29 @@
 
 ;; Every parser takes a
 
-(defun fl-parse-whitespace (stream state)
+(defclass parser-state ()
+  ())
+
+(defun parse-whitespace (scanner state)
   ())
 
 (deftest test-parse-whitespace ()
   t)
 
-(defun fl-parse-definition ()
+(defun parse-definition ()
   ())
 
-(defun fl-parse-statement ()
+(defun parse-statement ()
   ())
 
-(defun fl-parse-expresssion ()
+(defun parse-expresssion ()
   ())
 
-(defun fl-parse-modifier ()
+(defun parse-modifier ()
   ())
 
 (defsuite test-parsers ()
   (test-parse-whitespace))
 
-(defsuite all-tests ()
-    (test-scanners))
+(defun run-tests ()
+  (test-scanners))
