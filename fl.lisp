@@ -45,6 +45,15 @@
      (combine-results
        ,@body)))
 
+;;;;------------------------------ Sources --------------------------------------
+
+(defclass source ()
+  ())
+
+(defun make-source-region (left right)
+  (assert (<= left right))
+  (cons left right))
+
 ;;;;------------------------------- ASTs ----------------------------------------
 
 (defclass ast-node ()
@@ -70,6 +79,9 @@
 (defclass ast-mutable-modifier (ast-modifier)
   ())
 
+(defclass ast-abstract-modifier (ast-modifier)
+  ())
+
 (defclass ast-statement (ast-node)
   ())
 
@@ -84,7 +96,7 @@
 (defclass scanner ()
   ((position
     :initform 0
-    :reader scanner-position)))
+    :accessor scanner-position)))
 
 (defclass string-scanner (scanner)
   ((string
@@ -123,6 +135,14 @@
      t)
     (t nil)))
 
+(defun scanner-match-sequence (scanner token-list)
+  (every (lambda (token) (scanner-match scanner token)) token-list))
+
+(defmethod (setf scanner-position) :before (position (scanner string-scanner))
+  (if (or (<= position 0)
+	  (>= (length (slot-value scanner 'string))))
+      (error (format nil "Position ~a out of range for string ~a used by string-scanner!" position (slot-value scanner 'string)))))
+
 (deftest test-string-scanner ()
   (check
 
@@ -158,10 +178,22 @@
 (defmacro parse-result-length (result)
   `(third ,result))
 
+(defmacro parse-result-position (result)
+  `(second ,result))
+
+(defmacro parse-result-value (result)
+  `(first ,result))
+
+(defmacro parse-result-region (result)
+  (with-gensyms (res pos len)
+    `(let* ((,res ,result)
+	   (,pos (parse-result-position ,res)))
+       (make-source-region ,pos (+ ,pos (parse-result-length ,res))))))
+
 (defmacro parse-result-match (value position scanner)
   (with-gensyms (pos)
     `(let ((,pos ,position))
-       (list ,value ,pos (- (scanner-position scanner) ,pos)))))
+       (list ,value ,pos (- (scanner-position ,scanner) ,pos)))))
 
 (defmacro parse-result-no-match ()
   nil)
@@ -204,11 +236,26 @@
 (defun parse-expresssion ()
   ())
 
-(defun parse-modifier ()
-  ())
+(defun parse-modifier (scanner state)
+  (let ((saved-position (scanner-position scanner)))
+    (cond ((scanner-match-sequence scanner '(#\a #\b #\s #\t #\r #\a #\c #\t))
+	   (parse-result-match (make-instance 'ast-abstract-modifier :source-region (make-source-region saved-position (scanner-position scanner)))
+			       saved-position
+			       scanner))
+	  (t (parse-result-no-match)))))
+
+(deftest test-parse-modifier ()
+  (check
+    (let* ((scanner (make-string-scanner "abstract["))
+	   (result (parse-modifier scanner nil)))
+      (and (parse-result-match-p result)
+	   (equal (scanner-position scanner) 8)
+	   (equal (parse-result-length result) 8)
+	   (typep (parse-result-value result) 'ast-abstract-modifier)))))
 
 (defsuite test-parsers ()
-  (test-parse-whitespace))
+  (test-parse-whitespace)
+  (test-parse-modifier))
 
 (defun run-tests ()
   (test-scanners)
