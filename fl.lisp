@@ -166,6 +166,32 @@
 
 ;;;;------------------------------- Parsers ----------------------------------------
 
+(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type)
+  (with-gensyms (res scanner is-match-value end-position-value expected-type-value)
+    `(let* ((,scanner (make-string-scanner ,string))
+	    (,res (funcall ,function ,scanner ,state))
+	    (,is-match-value ,is-match-p)
+	    (,end-position-value ,end-position)
+	    (,expected-type-value ,expected-type))
+       (and
+
+	; Check match, if requested.
+	(if (not (eq ,is-match-value :dont-test))
+	    (if ,is-match-value
+		(parse-result-match-p ,res)
+		(parse-result-no-match-p ,res))
+	    t)
+	
+	; Check end position, if requested.
+	(if ,end-position-value
+	    (equal (scanner-position ,scanner) ,end-position-value)
+	    t)
+
+	; Check value type, if requested.
+	(if ,expected-type-value
+	    (typep (parse-result-value ,res) ,expected-type-value)
+	    t)))))
+
 (defparameter *parse-result-no-match* (cons nil nil))
 
 (defclass parser-state ()
@@ -204,15 +230,8 @@
 
 (deftest test-parse-whitespace ()
   (check
-
-    (let ((scanner (make-string-scanner "foo")))
-      (and (parse-result-no-match-p (parse-whitespace scanner nil))
-	   (equal (scanner-position scanner) 0)))
-    
-    (let* ((scanner (make-string-scanner (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab)))
-	   (result (parse-whitespace scanner nil)))
-      (and (parse-result-match-p result)
-	   (equal (scanner-position scanner) 4)))))
+    (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil)
+    (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4)))
 
 (defun parse-definition ()
   ())
@@ -225,18 +244,19 @@
 
 (defun parse-modifier (scanner state)
   (let ((saved-position (scanner-position scanner)))
-    (cond ((scanner-match-sequence scanner '(#\a #\b #\s #\t #\r #\a #\c #\t))
-	   (parse-result-match
-	    (make-instance 'ast-abstract-modifier :source-region (make-source-region saved-position (scanner-position scanner)))))
-	  (t (parse-result-no-match)))))
+    (flet ((parse-region () (make-source-region saved-position (scanner-position scanner))))
+      (cond ((scanner-match-sequence scanner "abstract")
+	     (parse-result-match
+	      (make-instance 'ast-abstract-modifier :source-region (parse-region))))
+	    ((scanner-match-sequence scanner "immutable")
+	     (parse-result-match
+	      (make-instance 'ast-immutable-modifier :source-region (parse-region))))
+	    (t (parse-result-no-match))))))
 
 (deftest test-parse-modifier ()
   (check
-    (let* ((scanner (make-string-scanner "abstract["))
-	   (result (parse-modifier scanner nil)))
-      (and (parse-result-match-p result)
-	   (equal (scanner-position scanner) 8)
-	   (typep (parse-result-value result) 'ast-abstract-modifier)))))
+    (test-parser 'parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
+    (test-parser 'parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier)))
 
 (defsuite test-parsers ()
   (test-parse-whitespace)
