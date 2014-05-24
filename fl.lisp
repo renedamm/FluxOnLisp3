@@ -1,12 +1,13 @@
+; This code is very non-idiomatic...
 
 (in-package :cl-user)
 
-(defpackage :fl
+(defpackage :flux
   (:use :common-lisp)
   (:export
    :run-tests))
 
-(in-package :fl)
+(in-package :flux)
 
 ;;;;============================================================================
 ;;;;	Test Framework.
@@ -298,7 +299,7 @@ to the previous line."
 
 (defclass ast-node ()
   ((region
-    :reader :source-region
+    :reader source-region
     :initarg :source-region)))
 
 (defclass ast-error (ast-node)
@@ -306,36 +307,48 @@ to the previous line."
 
 (defclass ast-list (ast-node)
   ((nodes
-    :reader :list-nodes
+    :reader list-nodes
     :initarg :nodes)))
+
+(defclass ast-global-qualifier (ast-node)
+  ())
+
+(defclass ast-identifier (ast-node)
+  ((qualifier
+    :reader id-qualifier
+    :initarg qualifier
+    :initform nil)
+   (name
+    :reader id-name
+    :initarg :name)))
 
 (defclass ast-definition (ast-node)
   ((attributes
-    :reader :definition-attributes
+    :reader definition-attributes
     :initarg :attributes)
    (modifiers
-    :reader :definition-modifiers
+    :reader definition-modifiers
     :initarg :modifiers)
    (name
-    :reader :definition-name
+    :reader definition-name
     :initarg :name)
    (type-parameters
-    :reader :definition-type-parameters
+    :reader definition-type-parameters
     :initarg :type-parameters)
    (value-parameters
-    :reader :definition-value-parameters
+    :reader definition-value-parameters
     :initarg :value-parameters)
    (clauses
-    :reader :definition-clauses
+    :reader definition-clauses
     :initarg :clauses)
    (type
-    :reader :definition-type
+    :reader definition-type
     :initarg :type)
    (value
-    :reader :definition-value
+    :reader definition-value
     :initarg :value)
    (body
-    :reader :definition-body
+    :reader definition-body
     :initarg :body)))
 
 (defclass ast-type-definition (ast-definition)
@@ -385,6 +398,36 @@ to the previous line."
 
 (defclass ast-compilation-unit (ast-node)
   ())
+
+;; -----------------------------------------------------------------------------
+(defmethod initialize-instance :after ((id ast-identifier) &key)
+  ;; Convert 'name' slot to symbol, if it isn't one already.
+  (let ((name (id-name id)))
+    (if (not (symbolp name))
+	(setf (slot-value id 'name) (intern name)))))
+
+(deftest test-ast-identifier-initialize ()
+  (let ((id (make-instance 'ast-identifier :name "test")))
+    (test (symbolp (id-name id)))))
+
+;; -----------------------------------------------------------------------------
+(defun identifier-to-string (id)
+  (let ((qualifier (id-qualifier id)))
+    (cond ((not qualifier)
+	   (symbol-name (id-name id)))
+	  ((typep qualifier 'ast-global-qualifier)
+	   (concatenate 'string "::" (symbol-name (id-name id))))
+	  (t
+	   (concatenate 'string (identifier-to-string qualifier) "::" (symbol-name (id-name id)))))))
+
+(deftest test-identifier-to-string ()
+  (let ((id1 (make-instance 'ast-identifier :name "test")))
+    (test-equal "test" (identifier-to-string id1))))
+
+;; -----------------------------------------------------------------------------
+(defsuite test-asts ()
+  (test-ast-identifier-initialize)
+  (test-identifier-to-string))
 
 ;;;;============================================================================
 ;;;;	Scanners.
@@ -500,8 +543,8 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at)
-  (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value)
+(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at check-ast)
+  (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value check-ast-value)
     `(let* ((,scanner (make-string-scanner ,string))
 	    (,state-value ,state))
 
@@ -513,7 +556,10 @@ to the previous line."
 	    (,is-match-value ,is-match-p)
 	    (,end-position-value ,end-position)
 	    (,expected-type-value ,expected-type)
-	    (,line-breaks-at-value ,line-breaks-at))
+	    (,line-breaks-at-value ,line-breaks-at)
+	    (,check-ast-value ,check-ast))
+
+	 ;////TODO: automatically check region of parsed AST
 
 	 ;; Check match, if requested.
 	 (if (not (eq ,is-match-value :dont-test))
@@ -531,7 +577,11 @@ to the previous line."
 	
 	 ;; Check line breaks, if requested.
 	 (if ,line-breaks-at-value
-	     (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value)))))))
+	     (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value)))
+
+	 ;; Check AST, if requested.
+	 (if ,check-ast-value
+	     (funcall ,check-ast-value (parse-result-value ,res)))))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* (cons nil nil))
@@ -696,7 +746,36 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-identifier (scanner state)
-  (parse-result-no-match))
+  (let ((start-position (scanner-position scanner))
+	(next-char (scanner-peek-next scanner))
+	(buffer (make-array 64 :adjustable t :fill-pointer 0 :element-type 'character)))
+    (if (or (alpha-char-p next-char)
+	    (equal next-char #\_))
+	(progn
+	  (scanner-read-next scanner)
+	  (vector-push-extend next-char buffer)
+	  (loop
+	     (if (scanner-at-end-p scanner)
+		 (return))
+	     (setf next-char (scanner-peek-next scanner))
+	     (if (and (not (alphanumericp next-char))
+		      (not (equal next-char #\_)))
+		 (return))
+	     (vector-push-extend next-char buffer)
+	     (scanner-read-next scanner))
+	  (parse-result-match (make-instance 'ast-identifier
+					     :source-region (make-source-region start-position (scanner-position scanner))
+					     :name (intern buffer))))
+	(parse-result-no-match))))
+
+(deftest test-parse-identifier-simple-name ()
+  (test-parser #'parse-identifier "test" :end-position 4 :is-match-p t :expected-type 'ast-identifier
+	       :check-ast (lambda (ast)
+			    (test-equal (intern "test") (id-name ast))
+			    (test-equal nil (id-qualifier ast)))))
+
+(defsuite test-parse-identifier ()
+  (test-parse-identifier-simple-name))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause (scanner state)
@@ -841,7 +920,9 @@ to the previous line."
     (parse-result-match ast)))
 
 (deftest test-parse-definition-simple-type ()
-  (test-parser #'parse-definition "type Foobar;" :is-match-p t :expected-type 'ast-type-definition))
+  (test-parser #'parse-definition "type Foobar;" :is-match-p t :expected-type 'ast-type-definition
+	       :check-ast (lambda (ast)
+			    (test-equal "Foobar" (identifier-to-string (definition-name ast))))))
 
 (defsuite test-parse-definition ()
   (test-parse-definition-simple-type))
@@ -850,6 +931,7 @@ to the previous line."
 (defsuite test-parsers ()
   (test-parse-whitespace)
   (test-parse-modifier)
+  (test-parse-identifier)
   (test-parse-definition))
 
 ;;;;============================================================================
@@ -858,6 +940,7 @@ to the previous line."
 
 ;////TODO: print test summary at end
 (defun run-tests ()
+  (test-asts)
   (test-scanners)
   (test-parsers)
   (test-utilities)
