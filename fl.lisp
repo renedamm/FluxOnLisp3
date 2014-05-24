@@ -322,6 +322,36 @@ to the previous line."
     :reader id-name
     :initarg :name)))
 
+(defclass ast-modifier (ast-node)
+  ())
+
+(defclass ast-immutable-modifier (ast-modifier)
+  ())
+
+(defclass ast-mutable-modifier (ast-modifier)
+  ())
+
+(defclass ast-abstract-modifier (ast-modifier)
+  ())
+
+(defclass ast-include-modifier (ast-modifier)
+  ())
+
+(defclass ast-import-modifier (ast-modifier)
+  ())
+
+(defclass ast-instantiable-modifier (ast-modifier)
+  ())
+
+(defclass ast-clause (ast-node)
+  ())
+
+(defclass ast-statement (ast-node)
+  ())
+
+(defclass ast-expression (ast-node)
+  ())
+
 (defclass ast-definition (ast-node)
   ((attributes
     :reader definition-attributes
@@ -366,38 +396,10 @@ to the previous line."
 (defclass ast-method-definition (ast-function-definition)
   ())
 
-(defclass ast-clause (ast-node)
-  ())
-
-(defclass ast-modifier (ast-node)
-  ())
-
-(defclass ast-immutable-modifier (ast-modifier)
-  ())
-
-(defclass ast-mutable-modifier (ast-modifier)
-  ())
-
-(defclass ast-abstract-modifier (ast-modifier)
-  ())
-
-(defclass ast-include-modifier (ast-modifier)
-  ())
-
-(defclass ast-import-modifier (ast-modifier)
-  ())
-
-(defclass ast-instantiable-modifier (ast-modifier)
-  ())
-
-(defclass ast-statement (ast-node)
-  ())
-
-(defclass ast-expression (ast-node)
-  ())
-
 (defclass ast-compilation-unit (ast-node)
-  ())
+  ((definitions
+    :reader unit-definitions
+    :initarg :definitions)))
 
 ;; -----------------------------------------------------------------------------
 (defmethod initialize-instance :after ((id ast-identifier) &key)
@@ -428,6 +430,19 @@ to the previous line."
 (defsuite test-asts ()
   (test-ast-identifier-initialize)
   (test-identifier-to-string))
+
+;;;;============================================================================
+;;;;	Naming Conventions.
+;;;;============================================================================
+
+(defclass naming-convention ()
+  (prefix
+   suffix
+   first-character-case
+   middle-character-case
+   last-character-case))
+
+(defgeneric normalize-name (name convention))
 
 ;;;;============================================================================
 ;;;;	Scanners.
@@ -710,7 +725,9 @@ to the previous line."
 		  (if (scanner-match scanner terminator)
 		      (return))))))
       (setf list (nreverse list))
-      (parse-result-match (make-instance 'ast-list :source-region (make-source-region start-position (scanner-position scanner)) :nodes list)))))
+      (if (equal (scanner-position scanner) start-position)
+	  (parse-result-no-match)
+	  (parse-result-match (make-instance 'ast-list :source-region (make-source-region start-position (scanner-position scanner)) :nodes list))))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-string-literal ()
@@ -869,7 +886,7 @@ to the previous line."
 				((scanner-match-sequence scanner "module")
 				 'ast-module-definition)
 				(t
-				 (not-implemented "parse error"))))
+				 (return-from parse-definition (parse-result-no-match)))))
 
     ;; Parse name.
     (parse-whitespace scanner state)
@@ -924,15 +941,34 @@ to the previous line."
 	       :check-ast (lambda (ast)
 			    (test-equal "Foobar" (identifier-to-string (definition-name ast))))))
 
+(deftest test-parse-definition-rejects-non-definition ()
+  (test-parser #'parse-definition "Foobar" :is-match-p nil))
+
 (defsuite test-parse-definition ()
-  (test-parse-definition-simple-type))
+  (test-parse-definition-simple-type)
+  (test-parse-definition-rejects-non-definition))
+
+;; -----------------------------------------------------------------------------
+(defun parse-compilation-unit (scanner state)
+  (let ((start-position (scanner-position scanner))
+	(definitions (parse-list #'parse-definition scanner state)))
+    (parse-result-match (make-instance 'ast-compilation-unit
+				       :source-region (make-source-region start-position (scanner-position scanner))
+				       :definitions definitions))))
+
+(deftest test-parse-compilation-unit-simple ()
+  (test-parser #'parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t))
+
+(defsuite test-parse-compilation-unit ()
+  (test-parse-compilation-unit-simple))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
   (test-parse-whitespace)
   (test-parse-modifier)
   (test-parse-identifier)
-  (test-parse-definition))
+  (test-parse-definition)
+  (test-parse-compilation-unit-simple))
 
 ;;;;============================================================================
 ;;;;	Entry Points.
