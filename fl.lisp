@@ -8,53 +8,225 @@
 
 (in-package :fl)
 
-;;;;------------------------- Unit Test Framework ---------------------------------
+;;;;============================================================================
+;;;;	Test Framework.
+;;;;============================================================================
 
+;////TODO: turn this into a stack and print suites/tests as we enter them (instead of for each single test)
 (defvar *test-name* nil)
 
+;; -----------------------------------------------------------------------------
 (defun report-result (result form)
   (format t "~:[FAIL~;pass~] ... ~a: ~a~%" result *test-name* form)
   result)
 
+;; -----------------------------------------------------------------------------
 (defmacro with-gensyms ((&rest names) &body body)
   `(let ,(loop for n in names collect `(,n (gensym)))
      ,@body))
 
+;; -----------------------------------------------------------------------------
 (defmacro combine-results (&body forms)
   (with-gensyms (result)
     `(let ((,result t))
        ,@(loop for f in forms collect `(unless ,f (setf ,result nil)))
        ,result)))
 
+;; -----------------------------------------------------------------------------
 (defmacro check (&body forms)
   `(combine-results
      ,@(loop for f in forms collect `(report-result ,f ',f))))
 
+;; -----------------------------------------------------------------------------
 (defmacro deftest-internal (name parameters &body body)
   `(defun ,name ,parameters
      (let ((*test-name* (append *test-name* (list ',name))))
        ,@body)))
 
+;; -----------------------------------------------------------------------------
 (defmacro deftest (name parameters &body body)
   `(deftest-internal ,name ,parameters
      (check
        ,@body)))
 
+;; -----------------------------------------------------------------------------
 (defmacro defsuite (name parameters &body body)
   `(deftest-internal ,name ,parameters
      (combine-results
        ,@body)))
 
-;;;;------------------------------ Sources --------------------------------------
+;;;;============================================================================
+;;;;	Utilities.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defun insert-into-array (vector value position)
+  (assert (<= position (length vector)))
+  (if (equal position (length vector))
+      (vector-push-extend value vector)
+      (progn
+	(replace vector vector :start2 position :start1 (1+ position)
+		 :end2 (vector-push-extend value vector))
+	(setf (aref vector position) value)))
+  vector)
+
+(deftest test-insert-into-array ()
+  (let ((vector (make-array 10 :adjustable t :fill-pointer 0)))
+    (insert-into-array vector 10 0)
+    (check (equal (length vector) 1))))
+
+;; -----------------------------------------------------------------------------
+(defsuite test-utilities ()
+  (test-insert-into-array))
+
+;;;;============================================================================
+;;;;	Sources.
+;;;;============================================================================
 
 (defclass source ()
   ())
 
+;; -----------------------------------------------------------------------------
 (defun make-source-region (left right)
   (assert (<= left right))
   (cons left right))
 
-;;;;------------------------------- ASTs ----------------------------------------
+;; -----------------------------------------------------------------------------
+(defun make-line-break-table ()
+  "Create a new line break table.  A line break table records the character indices of new lines in a text."
+  (let ((table (make-array 100 :fill-pointer 0 :adjustable t :element-type 'fixnum)))
+    (vector-push-extend 0 table) ; First line has no explicit line break so always record a line break at index 0 for it.
+    table))
+
+(deftest test-make-line-break-table-adds-first-line ()
+  (check
+    (equal (line-count (make-line-break-table)) 1)))
+
+;; -----------------------------------------------------------------------------
+(defun line-count (table)
+  (length table))
+
+;; -----------------------------------------------------------------------------
+(defun find-line-break-index (table position)
+  "Return the index of the line break that corresponds to the line of the given position.
+Note that a line break occurs *after* newlines, i.e. newline characters themselves still belong \
+to the previous line."
+  (assert (>= position 0))
+  (let ((upper-limit (1- (length table)))
+	(lower-limit 0))
+    (if (> position (elt table upper-limit))
+	upper-limit
+	(loop
+	   (if (equal upper-limit lower-limit)
+	       (return lower-limit))
+	   (let* ((current-index (+ lower-limit (floor (/ (- upper-limit lower-limit) 2))))
+		  (current-value (elt table current-index))
+		  (next-value (elt table (1+ current-index))))
+	     (if (and (< current-value position)
+		      (>= next-value position))
+		 (return current-index))
+	     (if (< current-value position)
+		 (setf lower-limit current-index)
+		 (setf upper-limit current-index)))))))
+
+(deftest test-find-line-break-index ()
+  (check
+    (let ((table (make-line-break-table)))
+      (add-line-break table 1)
+      (add-line-break table 10)
+      (add-line-break table 50)
+      (and (equal (find-line-break-index table 0) 0)
+	   (equal (find-line-break-index table 5) 1)
+	   (equal (find-line-break-index table 10) 1)
+	   (equal (find-line-break-index table 15) 2)
+	   (equal (find-line-break-index table 100) 3)))))
+
+;; -----------------------------------------------------------------------------
+(defun add-line-break (table position)
+  (assert (>= position 0))
+  (let ((index (find-line-break-index table position))
+	(upper-limit (1- (length table))))
+    (if (not (equal (elt table (if (< index upper-limit)
+				   (1+ index)
+				   index)) position))
+	(insert-into-array table position (1+ index)))
+    (1+ index)))
+
+(deftest test-add-line-break-appends-line-at-end ()
+  (check
+    (let ((table (make-line-break-table)))
+      (add-line-break table 10)
+      (and (equal (line-count table) 2)
+	   (equal (elt table 1) 10)))))
+
+(deftest test-add-line-break-does-not-add-duplicates ()
+  (check
+    (let ((table (make-line-break-table)))
+      (add-line-break table 10)
+      (add-line-break table 10)
+      (equal (line-count table) 2))))
+
+(deftest test-add-line-break-independent-of-insertion-order ()
+  (check
+    (let ((table (make-line-break-table)))
+      (add-line-break table 10)
+      (add-line-break table 5)
+      (and (equal (line-count table) 3)
+	   (equal (elt table 1) 5)
+	   (equal (elt table 2) 10)))))
+
+;; -----------------------------------------------------------------------------
+(defsuite test-text-utilities ()
+  (test-make-line-break-table-adds-first-line)
+  (test-add-line-break-appends-line-at-end)
+  (test-add-line-break-does-not-add-duplicates)
+  (test-add-line-break-independent-of-insertion-order)
+  (test-find-line-break-index))
+
+;;;;============================================================================
+;;;;	IR.
+;;;;============================================================================
+
+(defclass ir-node ()
+  ()
+  (:documentation "Abstract base class for IR nodes."))
+
+(defclass ir-fragment (ir-node)
+  (nodes
+   dependencies)
+  (:documentation "Partitions the IR into a set of nodes for incremental compilation."))
+
+(defclass ir-program (ir-node)
+  (name))
+
+(defclass ir-type (ir-node)
+  ())
+
+(defclass ir-predefined-type (ir-type)
+  ())
+
+(defclass ir-top-type (ir-predefined-type)
+  ())
+
+(defclass ir-bottom-type (ir-predefined-type)
+  ())
+
+(defclass ir-definition (ir-node)
+  ())
+
+(defclass ir-implementation (ir-node)
+  ())
+
+;;;;============================================================================
+;;;;	Types.
+;;;;============================================================================
+
+(defgeneric subtype-p (supertype subtype))
+(defgeneric supertype-p (subtype supertype))
+
+;;;;============================================================================
+;;;;	ASTs.
+;;;;============================================================================
 
 (defclass ast-node ()
   ((region
@@ -91,7 +263,9 @@
 (defclass ast-compilation-unit (ast-node)
   ())
 
-;;;;------------------------------- Scanners ----------------------------------------
+;;;;============================================================================
+;;;;	Scanners.
+;;;;============================================================================
 
 (defclass scanner ()
   ((position
@@ -110,23 +284,29 @@
 (defgeneric scanner-peek-next (scanner))
 (defgeneric scanner-read-next (scanner))
 (defgeneric scanner-match (scanner token))
+(defgeneric scanner-match-if (scanner function))
 
+;; -----------------------------------------------------------------------------
 (defun make-string-scanner (string)
   (make-instance 'string-scanner :string string))
 
+;; -----------------------------------------------------------------------------
 (defmethod scanner-at-end-p ((scanner string-scanner))
   (equal (slot-value scanner 'position)
 	 (length (slot-value scanner 'string))))
 
+;; -----------------------------------------------------------------------------
 (defmethod scanner-peek-next ((scanner string-scanner))
   (elt (slot-value scanner 'string)
        (slot-value scanner 'position)))
 
+;; -----------------------------------------------------------------------------
 (defmethod scanner-read-next ((scanner string-scanner))
   (let ((token (scanner-peek-next scanner)))
     (incf (slot-value scanner 'position))
     token))
 
+;; -----------------------------------------------------------------------------
 (defmethod scanner-match ((scanner string-scanner) char)
   (cond
     ((scanner-at-end-p scanner) nil)
@@ -135,14 +315,25 @@
      t)
     (t nil)))
 
+;; -----------------------------------------------------------------------------
+(defmethod scanner-match-if ((scanner string-scanner) function)
+  (cond
+    ((scanner-at-end-p scanner) nil)
+    ((funcall function (scanner-peek-next scanner))
+     (incf (slot-value scanner 'position)))
+    (t nil)))
+
+;; -----------------------------------------------------------------------------
 (defun scanner-match-sequence (scanner token-list)
   (every (lambda (token) (scanner-match scanner token)) token-list))
 
+;; -----------------------------------------------------------------------------
 (defmethod (setf scanner-position) :before (position (scanner string-scanner))
   (if (or (<= position 0)
 	  (>= (length (slot-value scanner 'string))))
       (error (format nil "Position ~a out of range for string ~a used by string-scanner!" position (slot-value scanner 'string)))))
 
+;; -----------------------------------------------------------------------------
 (deftest test-string-scanner ()
   (check
 
@@ -159,20 +350,28 @@
     
     (scanner-match (make-string-scanner "foo") #\f)
     (not (scanner-match (make-string-scanner "foo") #\b))
-    (not (scanner-match (make-string-scanner "") #\f))))
+    (not (scanner-match (make-string-scanner "") #\f))
+
+    (scanner-match-if (make-string-scanner "foo" ) (lambda (char) t))
+    (not (scanner-match-if (make-string-scanner "foo") (lambda (char) nil)))))
 
 (defsuite test-scanners ()
   (test-string-scanner))
 
-;;;;------------------------------- Parsers ----------------------------------------
+;;;;============================================================================
+;;;;	Parsers.
+;;;;============================================================================
 
-(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type)
-  (with-gensyms (res scanner is-match-value end-position-value expected-type-value)
+;; -----------------------------------------------------------------------------
+(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at)
+  (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value)
     `(let* ((,scanner (make-string-scanner ,string))
-	    (,res (funcall ,function ,scanner ,state))
+	    (,state-value ,state)
+	    (,res (funcall ,function ,scanner (if ,state-value ,state-value (make-instance 'parser-state))))
 	    (,is-match-value ,is-match-p)
 	    (,end-position-value ,end-position)
-	    (,expected-type-value ,expected-type))
+	    (,expected-type-value ,expected-type)
+	    (,line-breaks-at-value ,line-breaks-at))
        (and
 
 	; Check match, if requested.
@@ -182,66 +381,135 @@
 		(parse-result-no-match-p ,res))
 	    t)
 	
-	; Check end position, if requested.
+	;; Check end position, if requested.
 	(if ,end-position-value
 	    (equal (scanner-position ,scanner) ,end-position-value)
 	    t)
 
-	; Check value type, if requested.
+	;; Check value type, if requested.
 	(if ,expected-type-value
 	    (typep (parse-result-value ,res) ,expected-type-value)
+	    t)
+	
+	;; Check line breaks, if requested.
+	(if ,line-breaks-at-value
+	    ()
 	    t)))))
 
+;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* (cons nil nil))
 
+;; -----------------------------------------------------------------------------
 (defclass parser-state ()
-  ())
+  ((line-break-table
+    :initform (make-line-break-table)
+    :reader line-break-table)))
 
+;; -----------------------------------------------------------------------------
 (defmacro parse-result-match-p (result)
   `(not (eq ,result *parse-result-no-match*)))
 
+;; -----------------------------------------------------------------------------
 (defmacro parse-result-no-match-p (result)
   `(eq ,result *parse-result-no-match*))
 
+;; -----------------------------------------------------------------------------
 (defmacro parse-result-value (result)
   result)
 
+;; -----------------------------------------------------------------------------
 (defmacro parse-result-match (value)
   value)
 
+;; -----------------------------------------------------------------------------
 (defmacro parse-result-no-match ()
   '*parse-result-no-match*)
 
+;; -----------------------------------------------------------------------------
+;////TODO: comments
 (defun parse-whitespace (scanner state)
-  (let ((saved-position (scanner-position scanner)))
-    (loop
-       (if (scanner-at-end-p scanner)
-	   (return))
-       (let ((char (scanner-peek-next scanner)))
-	 (if (or (equal char #\Newline)
-		 (equal char #\Tab)
-		 (equal char #\Space)
-		 (equal char #\Return))
-	     (scanner-read-next scanner)
-	     (return))))
-    (if (not (equal saved-position (scanner-position scanner)))
+  (let ((initial-position (scanner-position scanner)))
+    (flet ((line-break () (add-line-break (line-break-table state) (scanner-position scanner)))
+	   (consume () (scanner-read-next scanner)))
+      (loop
+	 (if (scanner-at-end-p scanner)
+	     (return))
+	 (let ((char (scanner-peek-next scanner)))
+	   (cond ((equal char #\Newline)
+		  (consume)
+		  (line-break))
+		 ((equal char #\Return)
+		  (consume)
+		  (scanner-match scanner #\Newline)
+		  (line-break))
+		 ((or (equal char #\Tab)
+		      (equal char #\Space))
+		  (consume))
+		 ((equal char #\/)
+		  (scanner-read-next scanner)
+		  (cond ((scanner-match scanner #\/)
+			 ;; Loop until we come across a newline or return or the end of the stream.
+			 (loop
+			    (if (or (scanner-at-end-p scanner)
+				    (not (scanner-match-if scanner
+							   (lambda (char) (not (or (equal char #\Newline)
+										   (equal char #\Return)))))))
+				(return))))
+			(t
+			 (setf (scanner-position scanner) (1- (scanner-position scanner)))
+			 (return))))
+		 (t
+		  (return))))))
+    (if (not (equal initial-position (scanner-position scanner)))
 	(parse-result-match nil)
 	(parse-result-no-match))))
 
-(deftest test-parse-whitespace ()
+(deftest test-parse-whitespace-does-not-consume-non-whitespace ()
   (check
-    (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil)
+    (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil)))
+
+(deftest test-parse-whitespace-consumes-whitespace ()
+  (check
     (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4)))
 
+(deftest test-parse-whitespace-consumes-single-line-comments ()
+  (check
+    (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 7)))
+
+(defsuite test-parse-whitespace ()
+  (test-parse-whitespace-does-not-consume-non-whitespace)
+  (test-parse-whitespace-consumes-whitespace)
+  (test-parse-whitespace-consumes-single-line-comments))
+
+;; -----------------------------------------------------------------------------
+(defun parse-string-literal ()
+  ())
+
+;; -----------------------------------------------------------------------------
+(defun parse-numeric-literal ()
+  ())
+
+;; -----------------------------------------------------------------------------
+(defun parse-literal ()
+  ())
+
+;; -----------------------------------------------------------------------------
+(defun parse-clause ()
+  ())
+
+;; -----------------------------------------------------------------------------
 (defun parse-definition ()
   ())
 
+;; -----------------------------------------------------------------------------
 (defun parse-statement ()
   ())
 
-(defun parse-expresssion ()
+;; -----------------------------------------------------------------------------
+(defun parse-expression ()
   ())
 
+;; -----------------------------------------------------------------------------
 (defun parse-modifier (scanner state)
   (let ((saved-position (scanner-position scanner)))
     (flet ((parse-region () (make-source-region saved-position (scanner-position scanner))))
@@ -258,10 +526,17 @@
     (test-parser 'parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
     (test-parser 'parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier)))
 
+;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
   (test-parse-whitespace)
   (test-parse-modifier))
 
+;;;;============================================================================
+;;;;	Entry Points.
+;;;;============================================================================
+
 (defun run-tests ()
   (test-scanners)
-  (test-parsers))
+  (test-parsers)
+  (test-utilities)
+  (test-text-utilities))
