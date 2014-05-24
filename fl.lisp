@@ -142,13 +142,14 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun add-line-break (table position)
   (assert (>= position 0))
-  (let ((index (find-line-break-index table position))
-	(upper-limit (1- (length table))))
-    (if (not (equal (elt table (if (< index upper-limit)
-				   (1+ index)
-				   index)) position))
-	(insert-into-array table position (1+ index)))
-    (1+ index)))
+  (if (not (zerop position))
+      (let ((index (find-line-break-index table position))
+	    (upper-limit (1- (length table))))
+	(if (not (equal (elt table (if (< index upper-limit)
+				       (1+ index)
+				       index)) position))
+	    (insert-into-array table position (1+ index)))
+	(1+ index))))
 
 (deftest test-add-line-break-appends-line-at-end ()
   (let ((table (make-line-break-table)))
@@ -160,6 +161,7 @@ to the previous line."
   (let ((table (make-line-break-table)))
     (add-line-break table 10)
     (add-line-break table 10)
+    (add-line-break table 0)
     (check (equal (line-count table) 2))))
 
 (deftest test-add-line-break-independent-of-insertion-order ()
@@ -171,12 +173,32 @@ to the previous line."
     (check (equal (elt table 2) 10))))
 
 ;; -----------------------------------------------------------------------------
+(defun line-break-p (table position)
+  (assert (>= position 0))
+  (if (zerop position)
+      t
+      (let ((index (find-line-break-index table position)))
+	(cond ((< index (1- (length table)))
+	       (equal (elt table (1+ index)) position))
+	      (t
+	       (equal (elt table index) position))))))
+
+(deftest test-line-break-p ()
+  (let ((table (make-line-break-table)))
+    (add-line-break table 10)
+    (check (line-break-p table 0))
+    (check (line-break-p table 10))
+    (check (not (line-break-p table 5)))
+    (check (not (line-break-p table 15)))))
+
+;; -----------------------------------------------------------------------------
 (defsuite test-text-utilities ()
   (test-make-line-break-table-adds-first-line)
   (test-add-line-break-appends-line-at-end)
   (test-add-line-break-does-not-add-duplicates)
   (test-add-line-break-independent-of-insertion-order)
-  (test-find-line-break-index))
+  (test-find-line-break-index)
+  (test-line-break-p))
 
 ;;;;============================================================================
 ;;;;	IR.
@@ -361,30 +383,35 @@ to the previous line."
 (defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at)
   (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value)
     `(let* ((,scanner (make-string-scanner ,string))
-	    (,state-value ,state)
-	    (,res (funcall ,function ,scanner (if ,state-value ,state-value (make-instance 'parser-state))))
+	    (,state-value ,state))
+
+       (if (not ,state-value)
+	   (setf ,state-value (make-instance 'parser-state)))
+
+       (let*
+	   ((,res (funcall ,function ,scanner ,state-value))
 	    (,is-match-value ,is-match-p)
 	    (,end-position-value ,end-position)
 	    (,expected-type-value ,expected-type)
 	    (,line-breaks-at-value ,line-breaks-at))
 
-       ;; Check match, if requested.
-       (if (not (eq ,is-match-value :dont-test))
-	   (if ,is-match-value
-	       (check (parse-result-match-p ,res))
-	       (check (parse-result-no-match-p ,res))))
+	 ;; Check match, if requested.
+	 (if (not (eq ,is-match-value :dont-test))
+	     (if ,is-match-value
+		 (check (parse-result-match-p ,res))
+		 (check (parse-result-no-match-p ,res))))
 
-       ;; Check end position, if requested.
-       (if ,end-position-value
-	   (check (equal (scanner-position ,scanner) ,end-position-value)))
+	 ;; Check end position, if requested.
+	 (if ,end-position-value
+	     (check (equal (scanner-position ,scanner) ,end-position-value)))
 
-       ;; Check value type, if requested.
-       (if ,expected-type-value
-	   (check (typep (parse-result-value ,res) ,expected-type-value)))
+	 ;; Check value type, if requested.
+	 (if ,expected-type-value
+	     (check (typep (parse-result-value ,res) ,expected-type-value)))
 	
-       ;; Check line breaks, if requested.
-       (if ,line-breaks-at-value
-	   nil))))
+	 ;; Check line breaks, if requested.
+	 (if ,line-breaks-at-value
+	     (check (every (lambda (pos) (line-break-p (line-break-table ,state-value) pos)) ,line-breaks-at-value)))))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* (cons nil nil))
@@ -461,7 +488,7 @@ to the previous line."
   (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
 
 (defsuite test-parse-whitespace-consumes-single-line-comments ()
-  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8))
+  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8 :line-breaks-at '(8)))
 
 (defsuite test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
