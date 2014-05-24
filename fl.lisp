@@ -46,8 +46,7 @@
 ;; -----------------------------------------------------------------------------
 (defmacro deftest (name parameters &body body)
   `(deftest-internal ,name ,parameters
-     (check
-       ,@body)))
+     ,@body))
 
 ;; -----------------------------------------------------------------------------
 (defmacro defsuite (name parameters &body body)
@@ -130,16 +129,15 @@ to the previous line."
 		 (setf upper-limit current-index)))))))
 
 (deftest test-find-line-break-index ()
-  (check
-    (let ((table (make-line-break-table)))
-      (add-line-break table 1)
-      (add-line-break table 10)
-      (add-line-break table 50)
-      (and (equal (find-line-break-index table 0) 0)
-	   (equal (find-line-break-index table 5) 1)
-	   (equal (find-line-break-index table 10) 1)
-	   (equal (find-line-break-index table 15) 2)
-	   (equal (find-line-break-index table 100) 3)))))
+  (let ((table (make-line-break-table)))
+    (add-line-break table 1)
+    (add-line-break table 10)
+    (add-line-break table 50)
+    (check (equal (find-line-break-index table 0) 0))
+    (check (equal (find-line-break-index table 5) 1))
+    (check (equal (find-line-break-index table 10) 1))
+    (check (equal (find-line-break-index table 15) 2))
+    (check (equal (find-line-break-index table 100) 3))))
 
 ;; -----------------------------------------------------------------------------
 (defun add-line-break (table position)
@@ -153,27 +151,24 @@ to the previous line."
     (1+ index)))
 
 (deftest test-add-line-break-appends-line-at-end ()
-  (check
-    (let ((table (make-line-break-table)))
-      (add-line-break table 10)
-      (and (equal (line-count table) 2)
-	   (equal (elt table 1) 10)))))
+  (let ((table (make-line-break-table)))
+    (add-line-break table 10)
+    (check (equal (line-count table) 2))
+    (check (equal (elt table 1) 10))))
 
 (deftest test-add-line-break-does-not-add-duplicates ()
-  (check
-    (let ((table (make-line-break-table)))
-      (add-line-break table 10)
-      (add-line-break table 10)
-      (equal (line-count table) 2))))
+  (let ((table (make-line-break-table)))
+    (add-line-break table 10)
+    (add-line-break table 10)
+    (check (equal (line-count table) 2))))
 
 (deftest test-add-line-break-independent-of-insertion-order ()
-  (check
-    (let ((table (make-line-break-table)))
-      (add-line-break table 10)
-      (add-line-break table 5)
-      (and (equal (line-count table) 3)
-	   (equal (elt table 1) 5)
-	   (equal (elt table 2) 10)))))
+  (let ((table (make-line-break-table)))
+    (add-line-break table 10)
+    (add-line-break table 5)
+    (check (equal (line-count table) 3))
+    (check (equal (elt table 1) 5))
+    (check (equal (elt table 2) 10))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-text-utilities ()
@@ -372,29 +367,24 @@ to the previous line."
 	    (,end-position-value ,end-position)
 	    (,expected-type-value ,expected-type)
 	    (,line-breaks-at-value ,line-breaks-at))
-       (and
 
-	; Check match, if requested.
-	(if (not (eq ,is-match-value :dont-test))
-	    (if ,is-match-value
-		(parse-result-match-p ,res)
-		(parse-result-no-match-p ,res))
-	    t)
-	
-	;; Check end position, if requested.
-	(if ,end-position-value
-	    (equal (scanner-position ,scanner) ,end-position-value)
-	    t)
+       ;; Check match, if requested.
+       (if (not (eq ,is-match-value :dont-test))
+	   (if ,is-match-value
+	       (check (parse-result-match-p ,res))
+	       (check (parse-result-no-match-p ,res))))
 
-	;; Check value type, if requested.
-	(if ,expected-type-value
-	    (typep (parse-result-value ,res) ,expected-type-value)
-	    t)
+       ;; Check end position, if requested.
+       (if ,end-position-value
+	   (check (equal (scanner-position ,scanner) ,end-position-value)))
+
+       ;; Check value type, if requested.
+       (if ,expected-type-value
+	   (check (typep (parse-result-value ,res) ,expected-type-value)))
 	
-	;; Check line breaks, if requested.
-	(if ,line-breaks-at-value
-	    ()
-	    t)))))
+       ;; Check line breaks, if requested.
+       (if ,line-breaks-at-value
+	   nil))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* (cons nil nil))
@@ -464,17 +454,14 @@ to the previous line."
 	(parse-result-match nil)
 	(parse-result-no-match))))
 
-(deftest test-parse-whitespace-does-not-consume-non-whitespace ()
-  (check
-    (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil)))
+(defsuite test-parse-whitespace-does-not-consume-non-whitespace ()
+  (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil))
 
-(deftest test-parse-whitespace-consumes-whitespace ()
-  (check
-    (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4)))
+(defsuite test-parse-whitespace-consumes-whitespace ()
+  (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
 
-(deftest test-parse-whitespace-consumes-single-line-comments ()
-  (check
-    (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 7)))
+(defsuite test-parse-whitespace-consumes-single-line-comments ()
+  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 7))
 
 (defsuite test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
@@ -521,10 +508,9 @@ to the previous line."
 	      (make-instance 'ast-immutable-modifier :source-region (parse-region))))
 	    (t (parse-result-no-match))))))
 
-(deftest test-parse-modifier ()
-  (check
-    (test-parser 'parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
-    (test-parser 'parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier)))
+(defsuite test-parse-modifier ()
+  (test-parser 'parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
+  (test-parser 'parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
@@ -535,6 +521,7 @@ to the previous line."
 ;;;;	Entry Points.
 ;;;;============================================================================
 
+;////TODO: print test summary at end
 (defun run-tests ()
   (test-scanners)
   (test-parsers)
