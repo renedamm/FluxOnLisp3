@@ -33,9 +33,54 @@
        ,result)))
 
 ;; -----------------------------------------------------------------------------
-(defmacro check (&body forms)
+(defmacro test (&body forms)
   `(combine-results
      ,@(loop for f in forms collect `(report-result ,f ',f))))
+
+;; -----------------------------------------------------------------------------
+(defmacro test-equal (expected actual)
+  (with-gensyms (expected-value actual-value)
+    `(let ((,expected-value ,expected)
+	   (,actual-value ,actual))
+       (if (equal ,expected-value ,actual-value)
+	   (report-result t '(equal ,expected ,actual))
+	   (report-result nil (format nil "Expected ~a from ~a but got ~a" ,expected-value ',actual ,actual))))))
+
+;; -----------------------------------------------------------------------------
+(defmacro test-sequence-equal (expected actual)
+  (with-gensyms (expected-value actual-value index left right length-expected length-actual)
+    `(let* ((,expected-value ,expected)
+	    (,actual-value ,actual)
+	    (,length-expected (length ,expected-value))
+	    (,length-actual (length ,actual-value))
+	    (,left nil)
+	    (,right nil))
+       (if
+	(and
+	 ;; Check whether length matches.
+	 (if (not (equal ,length-expected ,length-actual))
+	     (report-result nil (format nil "Expected sequence of length ~a from ~a but got sequence of length ~a instead" ,length-expected ',actual ,length-actual))
+	     t)
+
+	 ;; Check whether elements match.
+	 (dotimes (,index (min ,length-expected ,length-actual) t)
+	   (setf ,left (elt ,expected-value ,index))
+	   (setf ,right (elt ,actual-value ,index))
+	   (if (not (equal ,left ,right))
+	       (progn
+		 (report-result nil (format nil "Expected ~a from ~a but found ~a instead of ~a at index ~a" ,expected-value ',actual ,right ,left ,index))
+		 (return nil)))))
+
+	(report-result t '(equal ,expected ,actual))))))
+
+;; -----------------------------------------------------------------------------
+(defmacro test-type (expected-type expr)
+  (with-gensyms (expected-type-value expr-value)
+    `(let ((,expected-type-value ,expected-type)
+	   (,expr-value ,expr))
+       (if (typep ,expr-value ,expected-type-value)
+	   (report-result t '(typep ,expr ,expected-type))
+	   (report-result nil (format nil "Expected value of type ~a but got ~a from ~a instead" ,expected-type ,expr-value ',expr))))))
 
 ;; -----------------------------------------------------------------------------
 (defmacro deftest-internal (name parameters &body body)
@@ -72,7 +117,7 @@
 (deftest test-insert-into-array ()
   (let ((vector (make-array 10 :adjustable t :fill-pointer 0)))
     (insert-into-array vector 10 0)
-    (check (equal (length vector) 1))))
+    (test (equal (length vector) 1))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-utilities ()
@@ -98,7 +143,7 @@
     table))
 
 (deftest test-make-line-break-table-adds-first-line ()
-  (check
+  (test
     (equal (line-count (make-line-break-table)) 1)))
 
 ;; -----------------------------------------------------------------------------
@@ -133,11 +178,11 @@ to the previous line."
     (add-line-break table 1)
     (add-line-break table 10)
     (add-line-break table 50)
-    (check (equal (find-line-break-index table 0) 0))
-    (check (equal (find-line-break-index table 5) 1))
-    (check (equal (find-line-break-index table 10) 1))
-    (check (equal (find-line-break-index table 15) 2))
-    (check (equal (find-line-break-index table 100) 3))))
+    (test-equal (find-line-break-index table 0) 0)
+    (test-equal (find-line-break-index table 5) 1)
+    (test-equal (find-line-break-index table 10) 1)
+    (test-equal (find-line-break-index table 15) 2)
+    (test-equal (find-line-break-index table 100) 3)))
 
 ;; -----------------------------------------------------------------------------
 (defun add-line-break (table position)
@@ -154,23 +199,23 @@ to the previous line."
 (deftest test-add-line-break-appends-line-at-end ()
   (let ((table (make-line-break-table)))
     (add-line-break table 10)
-    (check (equal (line-count table) 2))
-    (check (equal (elt table 1) 10))))
+    (test-equal (line-count table) 2)
+    (test-equal (elt table 1) 10)))
 
 (deftest test-add-line-break-does-not-add-duplicates ()
   (let ((table (make-line-break-table)))
     (add-line-break table 10)
     (add-line-break table 10)
     (add-line-break table 0)
-    (check (equal (line-count table) 2))))
+    (test-equal (line-count table) 2)))
 
 (deftest test-add-line-break-independent-of-insertion-order ()
   (let ((table (make-line-break-table)))
     (add-line-break table 10)
     (add-line-break table 5)
-    (check (equal (line-count table) 3))
-    (check (equal (elt table 1) 5))
-    (check (equal (elt table 2) 10))))
+    (test-equal (line-count table) 3)
+    (test-equal (elt table 1) 5)
+    (test-equal (elt table 2) 10)))
 
 ;; -----------------------------------------------------------------------------
 (defun line-break-p (table position)
@@ -186,10 +231,10 @@ to the previous line."
 (deftest test-line-break-p ()
   (let ((table (make-line-break-table)))
     (add-line-break table 10)
-    (check (line-break-p table 0))
-    (check (line-break-p table 10))
-    (check (not (line-break-p table 5)))
-    (check (not (line-break-p table 15)))))
+    (test (line-break-p table 0))
+    (test (line-break-p table 10))
+    (test (not (line-break-p table 5)))
+    (test (not (line-break-p table 15)))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-text-utilities ()
@@ -312,16 +357,30 @@ to the previous line."
   (equal (slot-value scanner 'position)
 	 (length (slot-value scanner 'string))))
 
+(deftest test-string-scanner-at-end-p ()
+  (test (not (scanner-at-end-p (make-string-scanner "foo"))))
+  (test (scanner-at-end-p (make-string-scanner ""))))
+
 ;; -----------------------------------------------------------------------------
 (defmethod scanner-peek-next ((scanner string-scanner))
   (elt (slot-value scanner 'string)
        (slot-value scanner 'position)))
+
+(deftest test-string-scanner-peek-next ()
+  (let ((scanner (make-string-scanner "foo")))
+    (test (equal (scanner-peek-next scanner) #\f))
+    (test (equal (scanner-position scanner) 0))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod scanner-read-next ((scanner string-scanner))
   (let ((token (scanner-peek-next scanner)))
     (incf (slot-value scanner 'position))
     token))
+
+(deftest test-string-scanner-read-next ()
+  (let ((scanner (make-string-scanner "foo")))
+    (test (equal (scanner-read-next scanner) #\f))
+    (test (equal (scanner-position scanner) 1))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod scanner-match ((scanner string-scanner) char)
@@ -332,6 +391,11 @@ to the previous line."
      t)
     (t nil)))
 
+(deftest test-string-scanner-match ()
+  (test (scanner-match (make-string-scanner "foo") #\f))
+  (test (not (scanner-match (make-string-scanner "foo") #\b)))
+  (test (not (scanner-match (make-string-scanner "") #\f))))
+
 ;; -----------------------------------------------------------------------------
 (defmethod scanner-match-if ((scanner string-scanner) function)
   (cond
@@ -340,40 +404,35 @@ to the previous line."
      (incf (slot-value scanner 'position)))
     (t nil)))
 
+(deftest test-string-scanner-match-if ()
+  (test (scanner-match-if (make-string-scanner "foo" ) (lambda (char) t)))
+  (test (not (scanner-match-if (make-string-scanner "foo") (lambda (char) nil)))))
+
 ;; -----------------------------------------------------------------------------
 (defun scanner-match-sequence (scanner token-list)
   (every (lambda (token) (scanner-match scanner token)) token-list))
 
 ;; -----------------------------------------------------------------------------
 (defmethod (setf scanner-position) :before (position (scanner string-scanner))
-  (if (or (<= position 0)
-	  (>= (length (slot-value scanner 'string))))
+  (if (or (< position 0)
+	  (> position (length (slot-value scanner 'string))))
       (error (format nil "Position ~a out of range for string ~a used by string-scanner!" position (slot-value scanner 'string)))))
 
+(deftest test-string-scanner-setf-position ()
+  (let ((scanner (make-string-scanner "foo")))
+    (setf (scanner-position scanner) 0)
+    (test (scanner-position scanner) 0)
+    (setf (scanner-position scanner) 3)
+    (test (scanner-position scanner) 3)))
+
 ;; -----------------------------------------------------------------------------
-(deftest test-string-scanner ()
-  (check
-
-    (not (scanner-at-end-p (make-string-scanner "foo")))
-    (scanner-at-end-p (make-string-scanner ""))
-
-    (let ((scanner (make-string-scanner "foo")))
-      (and (equal (scanner-peek-next scanner) #\f)
-	   (equal (scanner-position scanner) 0)))
-
-    (let ((scanner (make-string-scanner "foo")))
-      (and (equal (scanner-read-next scanner) #\f)
-	   (equal (scanner-position scanner) 1)))
-    
-    (scanner-match (make-string-scanner "foo") #\f)
-    (not (scanner-match (make-string-scanner "foo") #\b))
-    (not (scanner-match (make-string-scanner "") #\f))
-
-    (scanner-match-if (make-string-scanner "foo" ) (lambda (char) t))
-    (not (scanner-match-if (make-string-scanner "foo") (lambda (char) nil)))))
-
 (defsuite test-scanners ()
-  (test-string-scanner))
+  (test-string-scanner-at-end-p)
+  (test-string-scanner-peek-next)
+  (test-string-scanner-read-next)
+  (test-string-scanner-match)
+  (test-string-scanner-match-if)
+  (test-string-scanner-setf-position))
 
 ;;;;============================================================================
 ;;;;	Parsers.
@@ -398,20 +457,20 @@ to the previous line."
 	 ;; Check match, if requested.
 	 (if (not (eq ,is-match-value :dont-test))
 	     (if ,is-match-value
-		 (check (parse-result-match-p ,res))
-		 (check (parse-result-no-match-p ,res))))
+		 (test (parse-result-match-p ,res))
+		 (test (parse-result-no-match-p ,res))))
 
 	 ;; Check end position, if requested.
 	 (if ,end-position-value
-	     (check (equal (scanner-position ,scanner) ,end-position-value)))
+	     (test-equal ,end-position-value (scanner-position ,scanner)))
 
 	 ;; Check value type, if requested.
 	 (if ,expected-type-value
-	     (check (typep (parse-result-value ,res) ,expected-type-value)))
+	     (test-type ,expected-type-value (parse-result-value ,res)))
 	
 	 ;; Check line breaks, if requested.
 	 (if ,line-breaks-at-value
-	     (check (every (lambda (pos) (line-break-p (line-break-table ,state-value) pos)) ,line-breaks-at-value)))))))
+	     (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value)))))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* (cons nil nil))
@@ -443,7 +502,6 @@ to the previous line."
   '*parse-result-no-match*)
 
 ;; -----------------------------------------------------------------------------
-;////TODO: comments
 (defun parse-whitespace (scanner state)
   (let ((initial-position (scanner-position scanner)))
     (flet ((line-break () (add-line-break (line-break-table state) (scanner-position scanner)))
@@ -472,8 +530,26 @@ to the previous line."
 							   (lambda (char) (not (or (equal char #\Newline)
 										   (equal char #\Return)))))))
 				(return))))
+			((scanner-match scanner #\*)
+			 (let ((nesting-level 1))
+			   (loop
+			      (if (or (zerop nesting-level)
+				      (scanner-at-end-p scanner))
+				  (return))
+			      (let ((next-char (scanner-read-next scanner)))
+				(cond ((and (equal next-char #\/)
+					    (scanner-match scanner #\*))
+				       (incf nesting-level))
+				      ((and (equal next-char #\*)
+					    (scanner-match scanner #\/))
+				       (decf nesting-level))
+				      ((equal next-char #\Return)
+				       (scanner-match scanner #\Newline)
+				       (line-break))
+				      ((equal next-char #\Newline)
+				       (line-break)))))))
 			(t
-			 (setf (scanner-position scanner) (1- (scanner-position scanner)))
+			 (decf (scanner-position scanner))
 			 (return))))
 		 (t
 		  (return))))))
@@ -481,19 +557,23 @@ to the previous line."
 	(parse-result-match nil)
 	(parse-result-no-match))))
 
-(defsuite test-parse-whitespace-does-not-consume-non-whitespace ()
+(deftest test-parse-whitespace-does-not-consume-non-whitespace ()
   (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil))
 
-(defsuite test-parse-whitespace-consumes-whitespace ()
+(deftest test-parse-whitespace-consumes-whitespace ()
   (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
 
-(defsuite test-parse-whitespace-consumes-single-line-comments ()
-  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8 :line-breaks-at '(8)))
+(deftest test-parse-whitespace-consumes-single-line-comments ()
+  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8 :line-breaks-at '(0 8)))
+
+(deftest test-parse-whitespace-consume-multi-line-comments ()
+  (test-parser #'parse-whitespace (format nil " /* foo /* ~C bar */ */foo" #\Newline) :is-match-p t :end-position 22 :line-breaks-at '(0 12)))
 
 (defsuite test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
   (test-parse-whitespace-consumes-whitespace)
-  (test-parse-whitespace-consumes-single-line-comments))
+  (test-parse-whitespace-consumes-single-line-comments)
+  (test-parse-whitespace-consume-multi-line-comments))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-string-literal ()
