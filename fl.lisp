@@ -104,6 +104,12 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
+(defun not-implemented (&optional message)
+  (if message
+      (error (format nil "Not implemented: ~a" message))
+      (error "Not implemented!")))
+
+;; -----------------------------------------------------------------------------
 (defun insert-into-array (vector value position)
   (assert (<= position (length vector)))
   (if (equal position (length vector))
@@ -298,7 +304,53 @@ to the previous line."
 (defclass ast-error (ast-node)
   ())
 
+(defclass ast-list (ast-node)
+  ((nodes
+    :reader :list-nodes
+    :initarg :nodes)))
+
 (defclass ast-definition (ast-node)
+  ((attributes
+    :reader :definition-attributes
+    :initarg :attributes)
+   (modifiers
+    :reader :definition-modifiers
+    :initarg :modifiers)
+   (name
+    :reader :definition-name
+    :initarg :name)
+   (type-parameters
+    :reader :definition-type-parameters
+    :initarg :type-parameters)
+   (value-parameters
+    :reader :definition-value-parameters
+    :initarg :value-parameters)
+   (clauses
+    :reader :definition-clauses
+    :initarg :clauses)
+   (type
+    :reader :definition-type
+    :initarg :type)
+   (value
+    :reader :definition-value
+    :initarg :value)
+   (body
+    :reader :definition-body
+    :initarg :body)))
+
+(defclass ast-type-definition (ast-definition)
+  ())
+
+(defclass ast-object-definition (ast-type-definition)
+  ())
+
+(defclass ast-function-definition (ast-definition)
+  ())
+
+(defclass ast-field-definition (ast-function-definition)
+  ())
+
+(defclass ast-method-definition (ast-function-definition)
   ())
 
 (defclass ast-clause (ast-node)
@@ -314,6 +366,15 @@ to the previous line."
   ())
 
 (defclass ast-abstract-modifier (ast-modifier)
+  ())
+
+(defclass ast-include-modifier (ast-modifier)
+  ())
+
+(defclass ast-import-modifier (ast-modifier)
+  ())
+
+(defclass ast-instantiable-modifier (ast-modifier)
   ())
 
 (defclass ast-statement (ast-node)
@@ -523,7 +584,6 @@ to the previous line."
 		 ((equal char #\/)
 		  (scanner-read-next scanner)
 		  (cond ((scanner-match scanner #\/)
-			 ;; Loop until we come across a newline or return or the end of the stream.
 			 (loop
 			    (if (or (scanner-at-end-p scanner)
 				    (not (scanner-match-if scanner
@@ -576,6 +636,33 @@ to the previous line."
   (test-parse-whitespace-consume-multi-line-comments))
 
 ;; -----------------------------------------------------------------------------
+(defun parse-list (parser scanner state &key terminator separator opener)
+  (parse-whitespace scanner state)
+  (let ((start-position (scanner-position scanner)))
+    (if opener
+	(progn
+	  (parse-whitespace scanner state)
+	  (if (not (scanner-match scanner opener))
+	      (return-from parse-list (parse-result-no-match)))))
+    (let (list)
+      (loop
+	 (parse-whitespace scanner state)
+	 (let ((element (funcall parser scanner state)))
+	   (if (parse-result-no-match-p element)
+	       (return))
+	   (setf list (cons element list))
+	   (cond (separator
+		  (if (not (scanner-match scanner separator))
+		      (if (and terminator (scanner-match scanner terminator))
+			  (return))
+		      (not-implemented "parse error; expecting separator (or terminator)")))
+		 (terminator
+		  (if (scanner-match scanner terminator)
+		      (return))))))
+      (setf list (nreverse list))
+      (parse-result-match (make-instance 'ast-list :source-region (make-source-region start-position (scanner-position scanner)) :nodes list)))))
+
+;; -----------------------------------------------------------------------------
 (defun parse-string-literal ()
   ())
 
@@ -585,22 +672,6 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-literal ()
-  ())
-
-;; -----------------------------------------------------------------------------
-(defun parse-clause ()
-  ())
-
-;; -----------------------------------------------------------------------------
-(defun parse-definition ()
-  ())
-
-;; -----------------------------------------------------------------------------
-(defun parse-statement ()
-  ())
-
-;; -----------------------------------------------------------------------------
-(defun parse-expression ()
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -620,9 +691,166 @@ to the previous line."
   (test-parser 'parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier))
 
 ;; -----------------------------------------------------------------------------
+(defun parse-modifier-list (scanner state)
+  (parse-list #'parse-modifier scanner state))
+
+;; -----------------------------------------------------------------------------
+(defun parse-identifier (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-clause (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-clause-list (scanner state)
+  (parse-list #'parse-clause scanner state))
+
+;; -----------------------------------------------------------------------------
+(defun parse-attribute (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-attribute-list (scanner state)
+  (parse-list #'parse-attribute scanner state :opener #\[ :separator #\, :terminator #\]))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type-parameter (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type-parameter-list (scanner state)
+  "Parse a list of type parameters surrounded by '<' and '>'."
+  (parse-list #'parse-type-parameter scanner state :opener #\< :separator #\, :terminator #\>))
+
+;; -----------------------------------------------------------------------------
+(defun parse-value-parameter (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-value-parameter-list (scanner state)
+  "Parse a list of value parameters surrounded by '(' and ')'."
+  (parse-list #'parse-value-parameter scanner state :opener #\( :separator #\, :terminator #\)))
+
+;; -----------------------------------------------------------------------------
+(defun parse-statement (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-statement-list (scanner state)
+  "Parse a list of statements surrounded by '{' and '}'."
+  (parse-list #'parse-statement scanner state :opener #\{ :terminator #\}))
+
+;; -----------------------------------------------------------------------------
+(defun parse-expression (scanner state)
+  (parse-result-no-match))
+
+;; -----------------------------------------------------------------------------
+(defun parse-definition (scanner state)
+  (let (start-position
+	attributes
+	modifiers
+	definition-class
+	name
+	value-parameters
+	type-parameters
+	type
+	clauses
+	value
+	body
+	ast)
+
+    (parse-whitespace scanner state)
+    (setf start-position (scanner-position scanner))
+
+    ;; Parse attributes.
+    (setf attributes (parse-attribute-list scanner state))
+
+    ;; Parse modifiers.
+    (setf modifiers (parse-modifier-list scanner state))
+
+    ;; Parse definition kind.
+    (parse-whitespace scanner state)
+    (setf definition-class (cond ((scanner-match-sequence scanner "method")
+				 'ast-method-definition)
+				((scanner-match-sequence scanner "field")
+				 'ast-field-definition)
+				((scanner-match-sequence scanner "type")
+				 'ast-type-definition)
+				((scanner-match-sequence scanner "object")
+				 'ast-object-definition)
+				((scanner-match-sequence scanner "function")
+				 'ast-function-definition)
+				((scanner-match-sequence scanner "features")
+				 'ast-features-definition)
+				((scanner-match-sequence scanner "module")
+				 'ast-module-definition)
+				(t
+				 (not-implemented "parse error"))))
+
+    ;; Parse name.
+    (parse-whitespace scanner state)
+    (setf name (parse-identifier scanner state))
+
+    ;; Parse type parameters.
+    (setf type-parameters (parse-type-parameter-list scanner state))
+    
+    ;; Parse value parameters.
+    (setf value-parameters (parse-value-parameter-list scanner state))
+
+    ;; Parse type.
+    (parse-whitespace scanner state)
+    (if (scanner-match scanner #\:)
+	(progn
+	  (parse-whitespace scanner state)
+	  (setf type (parse-type scanner state))))
+
+    ;; Parse clauses.
+    (setf clauses (parse-clause-list scanner state))
+
+    ;; Parse body/value.
+    (parse-whitespace scanner state)
+    (cond ((scanner-match scanner #\;)
+	   t)
+	  ((scanner-match scanner #\=)
+	   (parse-whitespace scanner state)
+	   (setf value (parse-expression scanner state))
+	   (parse-whitespace scanner state)
+	   (if (not (scanner-match scanner #\;))
+	       (not-implemented "parse error; expecting semicolon")))
+	  (t
+	   (setf body (parse-statement-list scanner state))))
+
+    ;; Create AST node.
+    (setf ast (make-instance definition-class
+			     :source-region (make-source-region start-position (scanner-position scanner))
+			     :attributes attributes
+			     :modifiers modifiers
+			     :name name
+			     :type-parameters type-parameters
+			     :value-parameters value-parameters
+			     :type type
+			     :clauses clauses
+			     :value value
+			     :body body))
+
+    (parse-result-match ast)))
+
+(deftest test-parse-definition-simple-type ()
+  (test-parser #'parse-definition "type Foobar;" :is-match-p t :expected-type 'ast-type-definition))
+
+(defsuite test-parse-definition ()
+  (test-parse-definition-simple-type))
+
+;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
   (test-parse-whitespace)
-  (test-parse-modifier))
+  (test-parse-modifier)
+  (test-parse-definition))
 
 ;;;;============================================================================
 ;;;;	Entry Points.
