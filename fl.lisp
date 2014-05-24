@@ -461,7 +461,7 @@ to the previous line."
   (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
 
 (defsuite test-parse-whitespace-consumes-single-line-comments ()
-  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 7))
+  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8))
 
 (defsuite test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
