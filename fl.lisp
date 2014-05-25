@@ -1219,12 +1219,34 @@ to the previous line."
       "type Foobar;"
       #'parse-definition
       (operator name (superclass) slots)
-    (test-equal operator 'defclass)
+    (test-equal 'defclass operator)
     (test-equal "Foobar" (symbol-name name))
     (test-equal *object-class-name* superclass)))
 
 (defsuite test-emit-type-definition ()
   (test-emit-type-definition-simple))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-function-definition) state)
+  (let* ((name (identifier-to-lisp (definition-name ast)))
+	 (method `(defmethod ,name () ())))
+    (append-forms state (list method))
+    method))
+
+(deftest test-emit-function-definition-simple ()
+  (test-emitter
+      "method Foobar() {}"
+      #'parse-definition
+      (operator name () body)
+    (test-equal 'defmethod operator)
+    (test-equal "Foobar" (symbol-name name))))
+
+(defsuite test-emit-function-definition ()
+  (test-emit-function-definition-simple))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-field-definition) state)
+  (not-implemented "emitting fields"))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-compilation-unit) state)
@@ -1259,6 +1281,7 @@ to the previous line."
 (defsuite test-emitters ()
   (test-append-forms)
   (test-emit-type-definition)
+  (test-emit-function-definition)
   (test-emit-compilation-unit))
 
 ;;;;============================================================================
@@ -1280,6 +1303,8 @@ to the previous line."
 	       (list (parse-result-value result)))))
 	((stringp code)
 	 (parse (make-string-scanner code)))
+	((streamp code)
+	 (parse (make-stream-scanner code)))
 	((listp code)
 	 (mapcan #'parse code))
 	((pathnamep code)
@@ -1288,7 +1313,7 @@ to the previous line."
 	     (with-open-file (file code)
 	       (parse (make-stream-scanner file)))))
 	(t
-	 (not-implemented "parsing files, streams, etc."))))
+	 (error (format nil "Unrecognized type of code unit: ~a" code)))))
 
 (deftest test-parse-code-string ()
   (destructuring-bind (ast)
