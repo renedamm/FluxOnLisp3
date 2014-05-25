@@ -267,7 +267,8 @@ to the previous line."
 (defclass ast-list (ast-node)
   ((nodes
     :reader list-nodes
-    :initarg :nodes)))
+    :initarg :nodes
+    :initform nil)))
 
 (defclass ast-global-qualifier (ast-node)
   ())
@@ -384,6 +385,10 @@ to the previous line."
 (deftest test-identifier-to-string ()
   (let ((id1 (make-instance 'ast-identifier :name "test")))
     (test-equal "test" (identifier-to-string id1))))
+
+;; -----------------------------------------------------------------------------
+(defun identifier-to-lisp (id)
+  (intern (identifier-to-string id)))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-asts ()
@@ -911,15 +916,24 @@ to the previous line."
 (defun parse-compilation-unit (scanner state)
   (let ((start-position (scanner-position scanner))
 	(definitions (parse-list #'parse-definition scanner state)))
+    ;////TODO: make sure we have consumed all input
     (parse-result-match (make-instance 'ast-compilation-unit
 				       :source-region (make-source-region start-position (scanner-position scanner))
-				       :definitions definitions))))
+				       :definitions (if (parse-result-no-match-p definitions)
+							(make-instance 'ast-list :source-region (make-source-region start-position start-position))
+							(parse-result-value definitions))))))
 
 (deftest test-parse-compilation-unit-empty ()
-  (test-parser #'parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit))
+  (test-parser #'parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit
+	       :checks
+	       ((test-type 'ast-list (unit-definitions ast))
+		(test-equal nil (list-nodes (unit-definitions ast))))))
 
 (deftest test-parse-compilation-unit-simple ()
-  (test-parser #'parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t :expected-type 'ast-compilation-unit))
+  (test-parser #'parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t :expected-type 'ast-compilation-unit
+	       :checks
+	       ((test-type 'ast-list (unit-definitions ast))
+		(test-equal 2 (length (list-nodes (unit-definitions ast)))))))
 
 (defsuite test-parse-compilation-unit ()
   (test-parse-compilation-unit-empty)
@@ -939,9 +953,40 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass emitter-state ()
-  ((root
+  ((head
     :reader emitter-result
-    :initform ())))
+    :initform nil)
+   (tail
+    :reader emitter-result-tail
+    :initform nil)
+   (package-name
+    :reader emitter-package-name
+    :initarg :package-name
+    :initform "flux-program")))
+
+;; -----------------------------------------------------------------------------
+(defun append-forms (state list)
+  (let ((head (slot-value state 'head)))
+    (if (not head)
+	(progn
+	  (setf (slot-value state 'head) list)
+	  (setf (slot-value state 'tail) (last list)))
+	(progn
+	  (setf (cdr (slot-value state 'tail)) list)
+	  (setf (slot-value state 'tail) (last list))))))
+
+(deftest test-append-forms ()
+  (let ((state (make-instance 'emitter-state))
+	(list1 (list 1 2 3))
+	(list2 (list 4 5 6)))
+    (append-forms state list1)
+    (test (eq (slot-value state 'head) list1))
+    (test (eq (slot-value state 'tail) (last list1)))
+
+    (append-forms state list2)
+    (test (eq (slot-value state 'head) list1))
+    (test (eq (slot-value state 'tail) (last list2)))
+    (test-equal (list 1 2 3 4 5 6) (slot-value state 'head))))
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-emitter (code parser lambda-list &body checks)
@@ -961,23 +1006,56 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition) state)
-  `(defclass foobar ()))
+  (let* ((name (identifier-to-lisp (definition-name ast)))
+	 (result `(defclass ,name ())))
+    (append-forms state result)
+    result))
 
 (deftest test-emit-type-definition-simple ()
   (test-emitter
       "type Foobar;"
       #'parse-definition
       (operator name &rest rest)
-    (test (equal operator 'defclass))
-    (test (equal "FOOBAR" (symbol-name name)))))
+    (test-equal operator 'defclass)
+    (test-equal "Foobar" (symbol-name name))))
+
+(defsuite test-emit-type-definition ()
+  (test-emit-type-definition-simple))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-compilation-unit) state)
-  ())
+  "Emit code for compilation unit."
+
+  ;; Emit prologue.
+  (let ((package-name (intern (emitter-package-name state) :keyword)))
+    (append-forms state
+		  `((in-package :cl-user)
+		    (defpackage ,package-name
+		      (:use :common-lisp)
+		      (:export :__main))
+		    (in-package ,package-name))))
+
+  ;; Emit definitions.
+  (mapc (lambda (definition) (emit definition state))
+	(list-nodes (unit-definitions ast)))
+
+  (emitter-result state))
+
+(deftest test-emit-compilation-unit-prologue ()
+  (test-emitter
+      ""
+      #'parse-compilation-unit
+      (&rest code)
+    (test (find `(in-package ,(intern "flux-program" :keyword)) code :test #'equal))))
+
+(defsuite test-emit-compilation-unit ()
+  (test-emit-compilation-unit-prologue))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-emitters ()
-  (test-emit-type-definition-simple))
+  (test-append-forms)
+  (test-emit-type-definition)
+  (test-emit-compilation-unit))
 
 ;;;;============================================================================
 ;;;;	Entry Points.
@@ -1009,10 +1087,10 @@ directly into the parser), or a character stream (parsed as Flux code)."
   (test-parse-code-string))
 
 ;; -----------------------------------------------------------------------------
-(defun flux-to-lisp (code)
+(defun flux-to-lisp (code &key package-name)
   "Parses one or more units of Flux code and then translates them to Lisp.  Returns \
 the resulting Lisp expression."
-  (let ((emitter-state (make-instance 'emitter-state))
+  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name "flux-program")))
 	(asts (parse code)))
     (mapc #'emit asts)
     (emitter-result emitter-state)))
