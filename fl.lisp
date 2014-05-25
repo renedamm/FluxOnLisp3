@@ -101,6 +101,120 @@
        ,@body)))
 
 ;;;;============================================================================
+;;;;	Pathname Utilities.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defun component-present-p (value)
+  (and value (not (eql value :unspecific))))
+
+;; -----------------------------------------------------------------------------
+(defun directory-pathname-p (pathname)
+  (and
+   (not (component-present-p (pathname-name pathname)))
+   (not (component-present-p (pathname-type pathname)))
+   pathname))
+
+;; -----------------------------------------------------------------------------
+(defun pathname-as-directory (namestring)
+  (let ((pathname (pathname namestring)))
+    (when (wild-pathname-p pathname)
+      (error "Can't reliably convert wild pathnames."))
+    (if (not (directory-pathname-p namestring))
+	(make-pathname
+	 :directory (append (or (pathname-directory pathname) (list :relative))
+			    (list (file-namestring pathname)))
+	 :name nil
+	 :type nil
+	 :defaults pathname)
+	pathname)))
+
+;; -----------------------------------------------------------------------------
+(defun pathname-as-file (namestring)
+  (let ((pathname (pathname namestring)))
+    (when (wild-pathname-p pathname)
+      (error "Can't reliably convert wild pathnames."))
+    (if (directory-pathname-p namestring)
+	(let* ((directory (pathname-directory pathname))
+	       (name-and-type (pathname (first (last directory)))))
+	  (make-pathname
+	   :directory (butlast directory)
+	   :name (pathname-name name-and-type)
+	   :type (pathname-type name-and-type)
+	   :defaults pathname))
+	pathname)))
+
+;; -----------------------------------------------------------------------------
+(defun directory-wildcard (dirname)
+  (make-pathname
+   :name :wild
+   :type #-clisp :wild #+clisp nil
+   :defaults (pathname-as-directory dirname)))
+
+;; -----------------------------------------------------------------------------
+#+clisp
+(defun clisp-subdirectories-wildcard (wildcard)
+  (make-pathname
+   :directory (append (pathname-directory wildcard) (list :wild))
+   :name nil
+   :type nil
+   :defaults wildcard))
+
+;; -----------------------------------------------------------------------------
+(defun list-directory (dirname)
+  (when (wild-pathname-p dirname)
+    (error "Can only list concrete directory names."))
+  (let ((wildcard (directory-wildcard dirname)))
+    
+    #+(or sbcl cmu lispworks)
+    (directory wildcard)
+
+    #+openmcl
+    (directory wildcard :directories t)
+
+    #+allegro
+    (directory wildcard :directories-as-files nil)
+
+    #+clisp
+    (nconc
+     (directory wildcard)
+     (directory (clisp-subdirectories-wildcard wildcard)))
+
+    #-(or sbcl cmu lispworks allow clisp openmcl)
+    (error "LIST-DIRECTORY not implemented for current platform")))
+
+;; -----------------------------------------------------------------------------
+(defun file-exists-p (pathname)
+  #+(or sbcl lispworks openmcl)
+  (probe-file pathname)
+
+  #+(or allegro cmu)
+  (or (probe-file (pathname-as-directory pathname))
+      (probe-file pathname))
+
+  #+clisp
+  (or (ignore-errors
+	(probe-file (pathname-as-file pathname)))
+      (ignore-errors
+	(let ((directory-form (pathname-as-directory pathname)))
+	  (when (ext:probe-directory directory-form)
+	    directory-form))))
+  #-(or sbcl lispworks openmcl allegro cmu clisp)
+  (error "FILE-EXISTS-P not implemented for current platform"))
+
+;; -----------------------------------------------------------------------------
+(defun walk-directory (dirname fn &key directories (test (constantly t)))
+  (labels
+      ((walk (name)
+	 (cond
+	   ((directory-pathname-p name)
+	    (when (and directories (funcall test name))
+	      (funcall fn name))
+	    (dolist (x (list-directory name)) (walk x)))
+	   ((funcall test name) (funcall fn name)))))
+    (walk (pathname-as-directory dirname))))
+
+;;;;============================================================================
 ;;;;	Utilities.
 ;;;;============================================================================
 
@@ -423,13 +537,69 @@ to the previous line."
     :initform "")))
 
 (defclass stream-scanner (scanner)
-  ())
+  ((stream
+    :initarg :stream)
+   (stream-length
+    :initarg :length)))
 
-(defgeneric scanner-at-end? (scanner))
+(defgeneric scanner-at-end-p (scanner))
 (defgeneric scanner-peek-next (scanner))
 (defgeneric scanner-read-next (scanner))
 (defgeneric scanner-match (scanner token))
 (defgeneric scanner-match-if (scanner function))
+
+;; -----------------------------------------------------------------------------
+(defmethod scanner-match ((scanner scanner) token)
+  (cond ((scanner-at-end-p scanner) nil)
+	((equal (scanner-peek-next scanner) token)
+	 (scanner-read-next scanner)
+	 t)
+	(t nil)))
+
+(deftest test-scanner-match ()
+  (let ((scanner (make-stream-scanner "foo")))
+    (test (scanner-match scanner #\f))
+    (test (not (scanner-match scanner #\b)))))
+
+;; -----------------------------------------------------------------------------
+(defun make-stream-scanner (stream &key length)
+  (if (stringp stream)
+      (progn
+	(setf length (length stream))
+	(setf stream (make-string-input-stream stream))))
+  (make-instance 'stream-scanner :stream stream :length length))
+
+;; -----------------------------------------------------------------------------
+(defmethod initialize-instance :after ((instance stream-scanner) &key)
+  (if (not (slot-value instance 'stream-length))
+      (setf (slot-value instance 'stream-length) (file-length (slot-value instance 'stream)))))
+
+;; -----------------------------------------------------------------------------
+(defmethod scanner-at-end-p ((scanner stream-scanner))
+  (>= (slot-value scanner 'position)
+      (slot-value scanner 'stream-length)))
+
+(deftest test-stream-scanner-at-end-p ()
+  (let ((scanner (make-stream-scanner "")))
+    (test (scanner-at-end-p scanner))))
+
+;; -----------------------------------------------------------------------------
+(defmethod scanner-peek-next ((scanner stream-scanner))
+  (peek-char nil (slot-value scanner 'stream)))
+
+(deftest test-stream-scanner-peek-next ()
+  (let ((scanner (make-stream-scanner "foo")))
+    (test-equal (scanner-peek-next scanner) #\f)))
+
+;; -----------------------------------------------------------------------------
+(defmethod scanner-read-next ((scanner stream-scanner))
+  (let ((char (read-char (slot-value scanner 'stream))))
+    (incf (slot-value scanner 'position))
+    char))
+
+(deftest test-stream-scanner-read-next ()
+  (let ((scanner (make-stream-scanner "foo")))
+    (test-equal (scanner-read-next scanner) #\f)))
 
 ;; -----------------------------------------------------------------------------
 (defun make-string-scanner (string)
@@ -510,6 +680,9 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-scanners ()
+  (test-scanner-match)
+  (test-stream-scanner-at-end-p)
+  (test-stream-scanner-peek-next)
   (test-string-scanner-at-end-p)
   (test-string-scanner-peek-next)
   (test-string-scanner-read-next)
@@ -1008,7 +1181,7 @@ to the previous line."
 (defmethod emit ((ast ast-type-definition) state)
   (let* ((name (identifier-to-lisp (definition-name ast)))
 	 (result `(defclass ,name ())))
-    (append-forms state result)
+    (append-forms state (list result))
     result))
 
 (deftest test-emit-type-definition-simple ()
@@ -1062,12 +1235,12 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
+;; Parse one or more units of Flux code.  Returns a list of AST-COMPILATION-UNITs.
+;; A unit of code can be represented as a string (parsed directly as Flux code), a pathname
+;; (if pointing to a file, contents of file are parsed; if pointing to a directory, all Flux
+;; source files in the directory and any of its subdirectories are parsed), a scanner (fed
+;; directly into the parser), or a character stream (parsed as Flux code).
 (defun parse (code)
-  "Parse one or more units of Flux code.  Returns a list of AST-COMPILATION-UNITs.
-A unit of code can be represented as a string (parsed directly as Flux code), a pathname \
-(if pointing to a file, contents of file are parsed; if pointing to a directory, all Flux \
-source files in the directory and any of its subdirectories are parsed), a scanner (fed \
-directly into the parser), or a character stream (parsed as Flux code)."
   (cond ((typep code 'scanner)
 	 (let ((state (make-instance 'parser-state)))
 	   (list (parse-compilation-unit code state))))
@@ -1075,6 +1248,11 @@ directly into the parser), or a character stream (parsed as Flux code)."
 	 (parse (make-string-scanner code)))
 	((listp code)
 	 (mapcan #'parse code))
+	((pathnamep code)
+	 (if (directory-pathname-p code)
+	     (not-implemented "Compiling entire directories")
+	     (with-open-file (file code)
+	       (parse (make-stream-scanner file)))))
 	(t
 	 (not-implemented "parsing files, streams, etc."))))
 
@@ -1092,7 +1270,7 @@ directly into the parser), or a character stream (parsed as Flux code)."
 the resulting Lisp expression."
   (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name "flux-program")))
 	(asts (parse code)))
-    (mapc #'emit asts)
+    (mapc (lambda (ast) (emit ast emitter-state)) asts)
     (emitter-result emitter-state)))
 
 ;; -----------------------------------------------------------------------------
