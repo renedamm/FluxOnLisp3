@@ -1,4 +1,4 @@
-; This code is very non-idiomatic...
+; This code is pretty much the opposite of idiomatic Lisp...
 
 (in-package :cl-user)
 
@@ -251,47 +251,6 @@ to the previous line."
   (test-add-line-break-independent-of-insertion-order)
   (test-find-line-break-index)
   (test-line-break-p))
-
-;;;;============================================================================
-;;;;	IR.
-;;;;============================================================================
-
-(defclass ir-node ()
-  ()
-  (:documentation "Abstract base class for IR nodes."))
-
-(defclass ir-fragment (ir-node)
-  (nodes
-   dependencies)
-  (:documentation "Partitions the IR into a set of nodes for incremental compilation."))
-
-(defclass ir-program (ir-node)
-  (name))
-
-(defclass ir-type (ir-node)
-  ())
-
-(defclass ir-predefined-type (ir-type)
-  ())
-
-(defclass ir-top-type (ir-predefined-type)
-  ())
-
-(defclass ir-bottom-type (ir-predefined-type)
-  ())
-
-(defclass ir-definition (ir-node)
-  ())
-
-(defclass ir-implementation (ir-node)
-  ())
-
-;;;;============================================================================
-;;;;	Types.
-;;;;============================================================================
-
-(defgeneric subtype-p (supertype subtype))
-(defgeneric supertype-p (subtype supertype))
 
 ;;;;============================================================================
 ;;;;	ASTs.
@@ -558,8 +517,8 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at check-ast)
-  (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value check-ast-value)
+(defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at checks)
+  (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value)
     `(let* ((,scanner (make-string-scanner ,string))
 	    (,state-value ,state))
 
@@ -571,8 +530,7 @@ to the previous line."
 	    (,is-match-value ,is-match-p)
 	    (,end-position-value ,end-position)
 	    (,expected-type-value ,expected-type)
-	    (,line-breaks-at-value ,line-breaks-at)
-	    (,check-ast-value ,check-ast))
+	    (,line-breaks-at-value ,line-breaks-at))
 
 	 ;////TODO: automatically check region of parsed AST
 
@@ -594,9 +552,10 @@ to the previous line."
 	 (if ,line-breaks-at-value
 	     (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value)))
 
-	 ;; Check AST, if requested.
-	 (if ,check-ast-value
-	     (funcall ,check-ast-value (parse-result-value ,res)))))))
+	 ;; Check AST.
+	 (let ((ast (parse-result-value ,res)))
+	   (setf ast ast) ; Silence warning if check-ast is nil.
+	   ,@checks)))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* (cons nil nil))
@@ -786,10 +745,10 @@ to the previous line."
 	(parse-result-no-match))))
 
 (deftest test-parse-identifier-simple-name ()
-  (test-parser #'parse-identifier "test" :end-position 4 :is-match-p t :expected-type 'ast-identifier
-	       :check-ast (lambda (ast)
-			    (test-equal (intern "test") (id-name ast))
-			    (test-equal nil (id-qualifier ast)))))
+  (test-parser #'parse-identifier "test"
+	       :end-position 4 :is-match-p t :expected-type 'ast-identifier
+	       :checks ((test-equal (intern "test") (id-name ast))
+			(test-equal nil (id-qualifier ast)))))
 
 (defsuite test-parse-identifier ()
   (test-parse-identifier-simple-name))
@@ -937,9 +896,9 @@ to the previous line."
     (parse-result-match ast)))
 
 (deftest test-parse-definition-simple-type ()
-  (test-parser #'parse-definition "type Foobar;" :is-match-p t :expected-type 'ast-type-definition
-	       :check-ast (lambda (ast)
-			    (test-equal "Foobar" (identifier-to-string (definition-name ast))))))
+  (test-parser #'parse-definition "type Foobar;"
+	       :is-match-p t :expected-type 'ast-type-definition
+	       :checks ((test-equal "Foobar" (identifier-to-string (definition-name ast))))))
 
 (deftest test-parse-definition-rejects-non-definition ()
   (test-parser #'parse-definition "Foobar" :is-match-p nil))
@@ -956,10 +915,14 @@ to the previous line."
 				       :source-region (make-source-region start-position (scanner-position scanner))
 				       :definitions definitions))))
 
+(deftest test-parse-compilation-unit-empty ()
+  (test-parser #'parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit))
+
 (deftest test-parse-compilation-unit-simple ()
-  (test-parser #'parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t))
+  (test-parser #'parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t :expected-type 'ast-compilation-unit))
 
 (defsuite test-parse-compilation-unit ()
+  (test-parse-compilation-unit-empty)
   (test-parse-compilation-unit-simple))
 
 ;; -----------------------------------------------------------------------------
@@ -971,13 +934,96 @@ to the previous line."
   (test-parse-compilation-unit-simple))
 
 ;;;;============================================================================
+;;;;	Emitter.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defclass emitter-state ()
+  ((root
+    :reader emitter-result
+    :initform ())))
+
+;; -----------------------------------------------------------------------------
+(defmacro test-emitter (code parser lambda-list &body checks)
+  (with-gensyms (ast parser-value state result)
+    `(let* ((,parser-value ,parser)
+	    (,ast (funcall ,parser-value
+			   (make-string-scanner ,code)
+			   (make-instance 'parser-state)))
+	    (,state (make-instance 'emitter-state))
+	    (,result (emit ,ast ,state)))
+       (destructuring-bind ,lambda-list
+	   ,result
+	 ,@checks))))
+
+;; -----------------------------------------------------------------------------
+(defgeneric emit (ast state))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-type-definition) state)
+  `(defclass foobar ()))
+
+(deftest test-emit-type-definition-simple ()
+  (test-emitter
+      "type Foobar;"
+      #'parse-definition
+      (operator name &rest rest)
+    (test (equal operator 'defclass))
+    (test (equal "FOOBAR" (symbol-name name)))))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-compilation-unit) state)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defsuite test-emitters ()
+  (test-emit-type-definition-simple))
+
+;;;;============================================================================
 ;;;;	Entry Points.
 ;;;;============================================================================
 
+;; -----------------------------------------------------------------------------
+(defun parse (code)
+  "Parse one or more units of Flux code.  Returns a list of AST-COMPILATION-UNITs.
+A unit of code can be represented as a string (parsed directly as Flux code), a pathname \
+(if pointing to a file, contents of file are parsed; if pointing to a directory, all Flux \
+source files in the directory and any of its subdirectories are parsed), a scanner (fed \
+directly into the parser), or a character stream (parsed as Flux code)."
+  (cond ((typep code 'scanner)
+	 (let ((state (make-instance 'parser-state)))
+	   (list (parse-compilation-unit code state))))
+	((stringp code)
+	 (parse (make-string-scanner code)))
+	((listp code)
+	 (mapcan #'parse code))
+	(t
+	 (not-implemented "parsing files, streams, etc."))))
+
+(deftest test-parse-code-string ()
+  (destructuring-bind (ast)
+      (parse "type Foobar;")
+    (test (typep ast 'ast-compilation-unit))))
+
+(defsuite test-parse ()
+  (test-parse-code-string))
+
+;; -----------------------------------------------------------------------------
+(defun flux-to-lisp (code)
+  "Parses one or more units of Flux code and then translates them to Lisp.  Returns \
+the resulting Lisp expression."
+  (let ((emitter-state (make-instance 'emitter-state))
+	(asts (parse code)))
+    (mapc #'emit asts)
+    (emitter-result emitter-state)))
+
+;; -----------------------------------------------------------------------------
 ;////TODO: print test summary at end
 (defun run-tests ()
   (test-asts)
   (test-scanners)
   (test-parsers)
+  (test-emitters)
   (test-utilities)
-  (test-text-utilities))
+  (test-text-utilities)
+  (test-parse))
