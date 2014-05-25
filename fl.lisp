@@ -505,9 +505,27 @@ to the previous line."
   (intern (identifier-to-string id)))
 
 ;; -----------------------------------------------------------------------------
+(defun definition-has-modifier-p (ast type)
+  (let ((modifiers (definition-modifiers ast)))
+    (if (not modifiers)
+	nil
+	(find-if (lambda (modifier) (typep modifier type)) (list-nodes modifiers)))))
+
+(deftest test-definition-has-modifier-p ()
+  (let ((abstract-ast (parse-result-value (parse-definition (make-string-scanner "abstract type Foobar;") (make-instance 'parser-state))))
+	(plain-ast (parse-result-value (parse-definition (make-string-scanner "type Foobar;") (make-instance 'parser-state)))))
+    (test (definition-has-modifier-p abstract-ast 'ast-abstract-modifier))
+    (test (not (definition-has-modifier-p plain-ast 'ast-abstract-modifier)))))
+
+;; -----------------------------------------------------------------------------
+(defun definition-abstract-p (ast)
+  (definition-has-modifier-p ast 'ast-abstract-modifier))
+
+;; -----------------------------------------------------------------------------
 (defsuite test-asts ()
   (test-ast-identifier-initialize)
-  (test-identifier-to-string))
+  (test-identifier-to-string)
+  (test-definition-has-modifier-p))
 
 ;;;;============================================================================
 ;;;;	Naming Conventions.
@@ -736,7 +754,7 @@ to the previous line."
 	   ,@checks)))))
 
 ;; -----------------------------------------------------------------------------
-(defparameter *parse-result-no-match* (cons nil nil))
+(defparameter *parse-result-no-match* :no-match)
 
 ;; -----------------------------------------------------------------------------
 (defclass parser-state ()
@@ -745,24 +763,24 @@ to the previous line."
     :reader line-break-table)))
 
 ;; -----------------------------------------------------------------------------
-(defmacro parse-result-match-p (result)
-  `(not (eq ,result *parse-result-no-match*)))
+(defun parse-result-match-p (result)
+  (not (eq result *parse-result-no-match*)))
 
 ;; -----------------------------------------------------------------------------
-(defmacro parse-result-no-match-p (result)
-  `(eq ,result *parse-result-no-match*))
+(defun parse-result-no-match-p (result)
+  (eq result *parse-result-no-match*))
 
 ;; -----------------------------------------------------------------------------
-(defmacro parse-result-value (result)
+(defun parse-result-value (result)
   result)
 
 ;; -----------------------------------------------------------------------------
-(defmacro parse-result-match (value)
+(defun parse-result-match (value)
   value)
 
 ;; -----------------------------------------------------------------------------
-(defmacro parse-result-no-match ()
-  '*parse-result-no-match*)
+(defun parse-result-no-match ()
+  *parse-result-no-match*)
 
 ;; -----------------------------------------------------------------------------
 (defun parse-whitespace (scanner state)
@@ -852,7 +870,8 @@ to the previous line."
 	 (let ((element (funcall parser scanner state)))
 	   (if (parse-result-no-match-p element)
 	       (return))
-	   (setf list (cons element list))
+	   (assert (parse-result-value element))
+	   (setf list (cons (parse-result-value element) list))
 	   (cond (separator
 		  (if (not (scanner-match scanner separator))
 		      (if (and terminator (scanner-match scanner terminator))
@@ -862,9 +881,7 @@ to the previous line."
 		  (if (scanner-match scanner terminator)
 		      (return))))))
       (setf list (nreverse list))
-      (if (equal (scanner-position scanner) start-position)
-	  (parse-result-no-match)
-	  (parse-result-match (make-instance 'ast-list :source-region (make-source-region start-position (scanner-position scanner)) :nodes list))))))
+      (parse-result-match (make-instance 'ast-list :source-region (make-source-region start-position (scanner-position scanner)) :nodes list)))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-string-literal ()
@@ -1138,6 +1155,9 @@ to the previous line."
     :initform "flux-program")))
 
 ;; -----------------------------------------------------------------------------
+(defparameter *object-class-name* (intern "Object"))
+
+;; -----------------------------------------------------------------------------
 (defun append-forms (state list)
   (let ((head (slot-value state 'head)))
     (if (not head)
@@ -1180,17 +1200,28 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition) state)
   (let* ((name (identifier-to-lisp (definition-name ast)))
-	 (result `(defclass ,name ())))
-    (append-forms state (list result))
-    result))
+	 (superclasses (if (not (definition-type ast))
+			   (if (not (eq name *object-class-name*))
+			       (list *object-class-name*)
+			       ())
+			   (not-implemented "supertypes")))
+	 (class `(defclass ,name ,superclasses ())))
+    (append-forms state (list class))
+    (if (definition-abstract-p ast)
+	(let ((error-message (format nil "Cannot instantiate abstract class ~a!" (identifier-to-string (definition-name ast)))))
+	  (append-forms state
+			(list `(defmethod make-instance :before ((instance ,name) &key)
+				 (error ,error-message))))))
+    class))
 
 (deftest test-emit-type-definition-simple ()
   (test-emitter
       "type Foobar;"
       #'parse-definition
-      (operator name &rest rest)
+      (operator name (superclass) slots)
     (test-equal operator 'defclass)
-    (test-equal "Foobar" (symbol-name name))))
+    (test-equal "Foobar" (symbol-name name))
+    (test-equal *object-class-name* superclass)))
 
 (defsuite test-emit-type-definition ()
   (test-emit-type-definition-simple))
@@ -1242,8 +1273,11 @@ to the previous line."
 ;; directly into the parser), or a character stream (parsed as Flux code).
 (defun parse (code)
   (cond ((typep code 'scanner)
-	 (let ((state (make-instance 'parser-state)))
-	   (list (parse-compilation-unit code state))))
+	 (let* ((state (make-instance 'parser-state))
+		(result (parse-compilation-unit code state)))
+	   (if (parse-result-no-match-p result)
+	       (error "Parse error") ;////TODO: spill diagnostics
+	       (list (parse-result-value result)))))
 	((stringp code)
 	 (parse (make-string-scanner code)))
 	((listp code)
@@ -1272,6 +1306,13 @@ the resulting Lisp expression."
 	(asts (parse code)))
     (mapc (lambda (ast) (emit ast emitter-state)) asts)
     (emitter-result emitter-state)))
+
+;; -----------------------------------------------------------------------------
+(defun run-test-file ()
+  (let ((code (flux-to-lisp #P"C:/Users/Rene Damm/Dropbox/Workspaces/FluxOnLisp/Test.flux")))
+    (pprint code)
+    (mapc #'eval code)
+    (in-package :flux)))
 
 ;; -----------------------------------------------------------------------------
 ;////TODO: print test summary at end
