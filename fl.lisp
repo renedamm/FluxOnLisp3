@@ -10,6 +10,20 @@
 (in-package :flux)
 
 ;;;;============================================================================
+;;;;	Configuration.
+;;;;============================================================================
+
+;; Valid extensions for Flux source files.
+(defparameter *flux-file-extensions* '("flux"))
+
+;; Location of regression test suite.
+(defparameter *regression-suite-directory*
+  #+darwin
+  #P"/Users/rene/Dropbox/Workspaces/FluxOnLisp/RegressionTests"
+  #-darwin
+  #P"C:/Users/Rene Damm/Dropbox/Workspaces/FluxOnLisp/RegressionTests")
+
+;;;;============================================================================
 ;;;;	Test Framework.
 ;;;;============================================================================
 
@@ -1546,15 +1560,21 @@ the resulting Lisp expression."
     (emitter-result emitter-state)))
 
 ;; -----------------------------------------------------------------------------
-(defun run-test-file ()
-  (let ((code (flux-to-lisp #P"C:/Users/Rene Damm/Dropbox/Workspaces/FluxOnLisp/Test.flux")))
-    (pprint code)
-    (mapc #'eval code)
-    (in-package :flux)))
+(defun run-regression-tests ()
+  (flet ((test-file (pathname)
+	   (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
+	       (progn
+		 (print (format nil "--- ~a ---" pathname))
+		 (let ((code (flux-to-lisp pathname)))
+		   (pprint code)
+		   ;;////TODO: probably want something more elaborate than just evaluating the generated code
+		   (mapc #'eval code))))))
+    (walk-directory *regression-suite-directory* #'test-file :directories nil))
+  (in-package :flux))
 
 ;; -----------------------------------------------------------------------------
 ;////TODO: print test summary at end
-(defun run-tests ()
+(defun run-unit-tests ()
   (test-asts)
   (test-scanners)
   (test-parsers)
