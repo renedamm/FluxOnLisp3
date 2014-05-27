@@ -84,9 +84,14 @@
 	   (report-result nil (format nil "Expected value of type ~a but got ~a from ~a instead" ,expected-type ,expr-value ',expr))))))
 
 ;; -----------------------------------------------------------------------------
+(defmacro with-test-name (name &body body)
+  `(let ((*test-name* (append *test-name* (list ',name))))
+     ,@body))
+
+;; -----------------------------------------------------------------------------
 (defmacro deftest-internal (name parameters &body body)
   `(defun ,name ,parameters
-     (let ((*test-name* (append *test-name* (list ',name))))
+     (with-test-name ,name
        ,@body)))
 
 ;; -----------------------------------------------------------------------------
@@ -257,6 +262,16 @@
   (cons left right))
 
 ;; -----------------------------------------------------------------------------
+(defun source-region-empty (region)
+  (= (car region)
+     (cdr region)))
+
+;; -----------------------------------------------------------------------------
+(defun source-region-null (region)
+  (and (zerop (car region))
+       (zerop (cdr region))))
+
+;; -----------------------------------------------------------------------------
 (defun make-line-break-table ()
   "Create a new line break table.  A line break table records the character indices of new lines in a text."
   (let ((table (make-array 100 :fill-pointer 0 :adjustable t :element-type 'fixnum)))
@@ -367,6 +382,86 @@ to the previous line."
   (test-line-break-p))
 
 ;;;;============================================================================
+;;;;	Diagnostics.
+;;;;============================================================================
+
+; 1xxxx are syntax errors
+; 2xxxx are syntax warnings
+; 3xxxx are semantic errors
+; 4xxxx are semantic warnings
+; 5xxxx are implementation-specific errors
+; 6xxxx are implementation-specific warnings
+
+;; -----------------------------------------------------------------------------
+(defparameter *diagnostics-by-name*
+  (make-hash-table))
+
+;; -----------------------------------------------------------------------------
+(defparameter *diagnostics-by-code*
+  (make-hash-table))
+
+;; -----------------------------------------------------------------------------
+(defclass diagnostic ()
+  ((code
+    :reader diagnostic-code
+    :initarg :code)
+   (name
+    :reader diagnostic-name
+    :initarg :name)
+   (format
+    :reader diagnostic-format
+    :initarg :format)))
+
+;; -----------------------------------------------------------------------------
+(defclass diagnostic-message ()
+  (diagnostic
+   format-args
+   source
+   source-region
+   ast))
+
+;; -----------------------------------------------------------------------------
+(defmacro defdiagnostic (code name format)
+  (with-gensyms (instance)
+  `(let ((,instance (make-instance 'diagnostic
+				   :code ,code
+				   :name ',name
+				   :format ,format)))
+     (setf (gethash ,code *diagnostics-by-code*) ,instance)
+     (setf (gethash ',name *diagnostics-by-name*) ,instance))))
+
+;; -----------------------------------------------------------------------------
+(defdiagnostic 10001 block-not-closed "Expecting '}'")
+(defdiagnostic 10002 list-not-closed "Expecting ')'")
+(defdiagnostic 10003 separator-missing "Expecting ','")
+(defdiagnostic 10004 name-missing "Expecting identifier")
+
+;; -----------------------------------------------------------------------------
+(defun get-diagnostic-by-code (code)
+  (gethash code *diagnostics-by-code*))
+
+;; -----------------------------------------------------------------------------
+(defun get-diagnostic-by-name (name)
+  (gethash name *diagnostics-by-name*))
+
+;; -----------------------------------------------------------------------------
+(defun get-diagnostic-expecting (expecting)
+  (cond ((equal expecting #\})
+	 (get-diagnostic-by-name 'block-not-closed))
+	((equal expecting #\))
+	 (get-diagnostic-by-name 'list-not-closed))
+	((equal expecting #\,)
+	 (get-diagnostic-by-name 'separator-missing))
+	((equal expecting 'parse-identifier)
+	 (get-diagnostic-by-name 'identifier-missing))
+	(t
+	 (error (format nil "No diagnostic for expecting '~a'" expecting)))))
+
+;; -----------------------------------------------------------------------------
+(defun make-diagnostic-message (diagnostic)
+  ())
+
+;;;;============================================================================
 ;;;;	ASTs.
 ;;;;============================================================================
 
@@ -376,7 +471,9 @@ to the previous line."
     :initarg :source-region)))
 
 (defclass ast-error (ast-node)
-  ())
+  ((message
+    :reader error-message
+    :initarg :message)))
 
 (defclass ast-list (ast-node)
   ((nodes
@@ -474,6 +571,14 @@ to the previous line."
   ((definitions
     :reader unit-definitions
     :initarg :definitions)))
+
+;; -----------------------------------------------------------------------------
+(defun make-ast-error (scanner error &key start-position)
+  (if (not start-position)
+      (setf start-position (scanner-position scanner)))
+  ;;////TODO: diagnostic
+  (make-instance 'ast-error
+		 :source-region (make-source-region start-position (scanner-position scanner))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod initialize-instance :after ((id ast-identifier) &key)
@@ -714,7 +819,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at checks)
-  (with-gensyms (res scanner is-match-value end-position-value expected-type-value state-value line-breaks-at-value)
+  (with-gensyms (res scanner end-position-value expected-type-value state-value line-breaks-at-value)
     `(let* ((,scanner (make-string-scanner ,string))
 	    (,state-value ,state))
 
@@ -722,8 +827,7 @@ to the previous line."
 	   (setf ,state-value (make-instance 'parser-state)))
 
        (let*
-	   ((,res (funcall ,function ,scanner ,state-value))
-	    (,is-match-value ,is-match-p)
+	   ((,res (,function ,scanner ,state-value))
 	    (,end-position-value ,end-position)
 	    (,expected-type-value ,expected-type)
 	    (,line-breaks-at-value ,line-breaks-at))
@@ -731,10 +835,15 @@ to the previous line."
 	 ;////TODO: automatically check region of parsed AST
 
 	 ;; Check match, if requested.
-	 (if (not (eq ,is-match-value :dont-test))
-	     (if ,is-match-value
-		 (test (parse-result-match-p ,res))
-		 (test (parse-result-no-match-p ,res))))
+	 ,(cond
+	   ((eq is-match-p :dont-test)
+	    t)
+	   ((eq is-match-p :partial)
+	    `(test (parse-result-partial-match-p ,res)))
+	   (is-match-p
+	    `(test (parse-result-match-p ,res)))
+	   (t
+	    `(test (parse-result-no-match-p ,res))))
 
 	 ;; Check end position, if requested.
 	 (if ,end-position-value
@@ -757,30 +866,52 @@ to the previous line."
 (defparameter *parse-result-no-match* :no-match)
 
 ;; -----------------------------------------------------------------------------
+(defparameter *parse-result-no-value* :no-value)
+
+;; -----------------------------------------------------------------------------
 (defclass parser-state ()
   ((line-break-table
     :initform (make-line-break-table)
-    :reader line-break-table)))
+    :reader line-break-table)
+   errors))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
-  (not (eq result *parse-result-no-match*)))
+  (and (not (parse-result-no-match-p result))
+       (not (parse-result-partial-match-p result))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-no-match-p (result)
   (eq result *parse-result-no-match*))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-result-value (result)
-  result)
+(defun parse-result-partial-match-p (result)
+  (listp result))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-result-match (value)
-  value)
+(defun parse-result-value (result)
+  (if (parse-result-partial-match-p result)
+      (second result)
+      result))
+
+;; -----------------------------------------------------------------------------
+(defun parse-result-diagnostic (result)
+  (assert (parse-result-partial-match-p result))
+  (first result))
+
+;; -----------------------------------------------------------------------------
+(defun parse-result-match (&optional value)
+  (if value
+      value
+      *parse-result-no-value*))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-no-match ()
   *parse-result-no-match*)
+
+;; -----------------------------------------------------------------------------
+(defun parse-result-partial-match (diagnostic value)
+  (cons diagnostic value))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-whitespace (scanner state)
@@ -838,16 +969,16 @@ to the previous line."
 	(parse-result-no-match))))
 
 (deftest test-parse-whitespace-does-not-consume-non-whitespace ()
-  (test-parser #'parse-whitespace "foo" :end-position 0 :is-match-p nil))
+  (test-parser parse-whitespace "foo" :end-position 0 :is-match-p nil))
 
 (deftest test-parse-whitespace-consumes-whitespace ()
-  (test-parser #'parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
+  (test-parser parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
 
 (deftest test-parse-whitespace-consumes-single-line-comments ()
-  (test-parser #'parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8 :line-breaks-at '(0 8)))
+  (test-parser parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8 :line-breaks-at '(0 8)))
 
 (deftest test-parse-whitespace-consume-multi-line-comments ()
-  (test-parser #'parse-whitespace (format nil " /* foo /* ~C bar */ */foo" #\Newline) :is-match-p t :end-position 22 :line-breaks-at '(0 12)))
+  (test-parser parse-whitespace (format nil " /* foo /* ~C bar */ */foo" #\Newline) :is-match-p t :end-position 22 :line-breaks-at '(0 12)))
 
 (defsuite test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
@@ -856,32 +987,112 @@ to the previous line."
   (test-parse-whitespace-consume-multi-line-comments))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-list (parser scanner state &key terminator separator opener)
-  (parse-whitespace scanner state)
-  (let ((start-position (scanner-position scanner)))
-    (if opener
-	(progn
-	  (parse-whitespace scanner state)
-	  (if (not (scanner-match scanner opener))
-	      (return-from parse-list (parse-result-no-match)))))
-    (let (list)
-      (loop
-	 (parse-whitespace scanner state)
-	 (let ((element (funcall parser scanner state)))
-	   (if (parse-result-no-match-p element)
-	       (return))
-	   (assert (parse-result-value element))
-	   (setf list (cons (parse-result-value element) list))
-	   (cond (separator
-		  (if (not (scanner-match scanner separator))
-		      (if (and terminator (scanner-match scanner terminator))
-			  (return))
-		      (not-implemented "parse error; expecting separator (or terminator)")))
-		 (terminator
-		  (if (scanner-match scanner terminator)
-		      (return))))))
-      (setf list (nreverse list))
-      (parse-result-match (make-instance 'ast-list :source-region (make-source-region start-position (scanner-position scanner)) :nodes list)))))
+;; Combinator that turns another parser into a list parser.  This combinator can be broken
+;; down into more atomic combinators that can be composed to create the same effect as this
+;; combinator here yet in a more flexible manner.  However, 
+(defmacro parse-list (parser-name scanner state &key start-delimiter end-delimiter separator)
+  ;; List must either be undelimited or have both a start and end
+  ;; delimiter.
+  (with-gensyms (scanner-value state-value list start-position element parse-list-block)
+    `(block ,parse-list-block
+       (let ((,scanner-value ,scanner)
+	     (,state-value ,state))
+
+	 (parse-whitespace ,scanner-value ,state-value)
+	 (let ((,start-position (scanner-position ,scanner-value))
+	       ,element
+	       ,list)
+
+	   ;; Match start-delimiter.
+	   ,(if start-delimiter
+		`(progn
+		   (parse-whitespace ,scanner-value ,state-value)
+		   (if (not (scanner-match ,scanner-value ,start-delimiter))
+		       (return-from ,parse-list-block (parse-result-no-match)))))
+
+	   ;; Match elements.
+	   (loop
+
+	      ;; Try to parse another element.
+	      (parse-whitespace ,scanner-value ,state-value)
+	      (setf ,element (,parser-name ,scanner-value ,state-value))
+	      (parse-whitespace ,scanner-value ,state-value)
+
+	      ;; Handle parse result.
+	      (cond
+
+		;; Handle match.
+		((parse-result-match-p ,element)
+		 (setf ,list (cons (parse-result-value ,element) ,list))
+	       
+		 ;; Consume separator or terminate on end-delimiter.
+		 ,(cond
+
+		   ((and separator (not end-delimiter))	
+		    `(if (not (scanner-match ,scanner-value ,separator))
+			 (return)))
+
+		   ((and separator end-delimiter)
+		    `(if (scanner-match ,scanner-value ,separator)
+			 t
+			 (if (scanner-match ,scanner-value ,end-delimiter)
+			     (return)
+			     (not-implemented "expecting separator or terminator"))))))
+
+		;; Handle no match.
+		((parse-result-no-match-p ,element)
+	       
+		 ,(if separator
+		      `(cond
+
+			 ;; If next up is a separator, we're missing an element.
+			 ((scanner-match ,scanner-value ,separator)
+			  (not-implemented "error; expecting element"))
+			
+			 ;; Otherwise, if we haven't yet parsed any elements and we don't
+			 ;; have an end-delimiter, we consider it a no-match rather than a match
+			 ;; against an empty list.
+			 ((and (not ,list)
+			       ,(not end-delimiter))
+			  (return-from ,parse-list-block (parse-result-no-match)))))
+
+		 ,(if end-delimiter
+		      `(if (not (scanner-match ,scanner-value ,end-delimiter))
+			   (not-implemented "error; expecting element or terminator")))
+
+		 (return))
+
+		;; Handle partial match.
+		((parse-result-partial-match-p ,element)
+		 (not-implemented "partial match"))))
+		  
+	   (setf ,list (nreverse ,list))
+	   (parse-result-match (make-instance 'ast-list 
+					      :source-region (make-source-region ,start-position (scanner-position ,scanner-value))
+					      :nodes ,list)))))))
+
+(deftest test-parse-list ()
+  (labels
+      ;; Define a dummy parser that matches "ab".
+      ((parse-ab (scanner state)
+	 (if (scanner-match scanner #\a)
+	     (if (scanner-match scanner #\b)
+		 (parse-result-match (make-instance 'ast-node :source-region (make-source-region (- (scanner-position scanner) 2) (scanner-position scanner))))
+		 (parse-result-partial-match "Expecting 'b'" nil))
+	     (parse-result-no-match)))
+
+       ;; Parser that matches "ab, ab, ab...".
+       (parse-comma-separated-abs (scanner state)
+	 (parse-list parse-ab scanner state :separator #\,)))
+   
+    (with-test-name test-no-match
+      (test-parser parse-comma-separated-abs "foo" :is-match-p nil :end-position 0))
+
+    (with-test-name test-single-element
+      (test-parser parse-comma-separated-abs "ab" :is-match-p t :expected-type 'ast-list :end-position 2))
+
+    (with-test-name test-comma-separated
+      (test-parser parse-comma-separated-abs "ab, ab, ab]" :is-match-p t :expected-type 'ast-list :end-position 10))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-string-literal ()
@@ -908,12 +1119,12 @@ to the previous line."
 	    (t (parse-result-no-match))))))
 
 (defsuite test-parse-modifier ()
-  (test-parser 'parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
-  (test-parser 'parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier))
+  (test-parser parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
+  (test-parser parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier-list (scanner state)
-  (parse-list #'parse-modifier scanner state))
+  (parse-list parse-modifier scanner state))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-identifier (scanner state)
@@ -940,7 +1151,7 @@ to the previous line."
 	(parse-result-no-match))))
 
 (deftest test-parse-identifier-simple-name ()
-  (test-parser #'parse-identifier "test"
+  (test-parser parse-identifier "test"
 	       :end-position 4 :is-match-p t :expected-type 'ast-identifier
 	       :checks ((test-equal (intern "test") (id-name ast))
 			(test-equal nil (id-qualifier ast)))))
@@ -954,7 +1165,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause-list (scanner state)
-  (parse-list #'parse-clause scanner state))
+  (parse-list parse-clause scanner state))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-attribute (scanner state)
@@ -962,7 +1173,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-attribute-list (scanner state)
-  (parse-list #'parse-attribute scanner state :opener #\[ :separator #\, :terminator #\]))
+  (parse-list parse-attribute scanner state :start-delimiter #\[ :separator #\, :end-delimiter #\]))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type (scanner state)
@@ -975,7 +1186,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter-list (scanner state)
   "Parse a list of type parameters surrounded by '<' and '>'."
-  (parse-list #'parse-type-parameter scanner state :opener #\< :separator #\, :terminator #\>))
+  (parse-list parse-type-parameter scanner state :start-delimiter #\< :separator #\, :end-delimiter #\>))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-value-parameter (scanner state)
@@ -984,7 +1195,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-value-parameter-list (scanner state)
   "Parse a list of value parameters surrounded by '(' and ')'."
-  (parse-list #'parse-value-parameter scanner state :opener #\( :separator #\, :terminator #\)))
+  (parse-list parse-value-parameter scanner state :start-delimiter #\( :separator #\, :end-delimiter #\)))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-statement (scanner state)
@@ -993,7 +1204,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-statement-list (scanner state)
   "Parse a list of statements surrounded by '{' and '}'."
-  (parse-list #'parse-statement scanner state :opener #\{ :terminator #\}))
+  (parse-list parse-statement scanner state :start-delimiter #\{ :end-delimiter #\}))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-expression (scanner state)
@@ -1091,12 +1302,12 @@ to the previous line."
     (parse-result-match ast)))
 
 (deftest test-parse-definition-simple-type ()
-  (test-parser #'parse-definition "type Foobar;"
+  (test-parser parse-definition "type Foobar;"
 	       :is-match-p t :expected-type 'ast-type-definition
 	       :checks ((test-equal "Foobar" (identifier-to-string (definition-name ast))))))
 
 (deftest test-parse-definition-rejects-non-definition ()
-  (test-parser #'parse-definition "Foobar" :is-match-p nil))
+  (test-parser parse-definition "Foobar" :is-match-p nil))
 
 (defsuite test-parse-definition ()
   (test-parse-definition-simple-type)
@@ -1105,7 +1316,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-compilation-unit (scanner state)
   (let ((start-position (scanner-position scanner))
-	(definitions (parse-list #'parse-definition scanner state)))
+	(definitions (parse-list parse-definition scanner state)))
     ;////TODO: make sure we have consumed all input
     (parse-result-match (make-instance 'ast-compilation-unit
 				       :source-region (make-source-region start-position (scanner-position scanner))
@@ -1114,13 +1325,13 @@ to the previous line."
 							(parse-result-value definitions))))))
 
 (deftest test-parse-compilation-unit-empty ()
-  (test-parser #'parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit
+  (test-parser parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit
 	       :checks
 	       ((test-type 'ast-list (unit-definitions ast))
 		(test-equal nil (list-nodes (unit-definitions ast))))))
 
 (deftest test-parse-compilation-unit-simple ()
-  (test-parser #'parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t :expected-type 'ast-compilation-unit
+  (test-parser parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t :expected-type 'ast-compilation-unit
 	       :checks
 	       ((test-type 'ast-list (unit-definitions ast))
 		(test-equal 2 (length (list-nodes (unit-definitions ast)))))))
@@ -1132,6 +1343,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
   (test-parse-whitespace)
+  (test-parse-list)
   (test-parse-modifier)
   (test-parse-identifier)
   (test-parse-definition)
@@ -1329,6 +1541,7 @@ to the previous line."
 the resulting Lisp expression."
   (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name "flux-program")))
 	(asts (parse code)))
+    ;////TODO: need to do a pre-pass to gather all types
     (mapc (lambda (ast) (emit ast emitter-state)) asts)
     (emitter-result emitter-state)))
 
