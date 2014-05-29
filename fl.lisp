@@ -120,7 +120,7 @@
        ,@body)))
 
 ;;;;============================================================================
-;;;;	Pathname Utilities.
+;;;;	File Utilities.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
@@ -233,6 +233,16 @@
 	   ((funcall test name) (funcall fn name)))))
     (walk (pathname-as-directory dirname))))
 
+;; -----------------------------------------------------------------------------
+(defun read-string (stream-or-pathname)
+  (if (not (streamp stream-or-pathname))
+      (with-open-file (file stream-or-pathname)
+	(read-string file))
+      (let* ((length-remaining (- (file-length stream-or-pathname)
+				  (file-position stream-or-pathname)))
+	     (data (make-string length-remaining)))
+	(read-sequence data stream-or-pathname))))
+
 ;;;;============================================================================
 ;;;;	Utilities.
 ;;;;============================================================================
@@ -267,8 +277,35 @@
 ;;;;	Sources.
 ;;;;============================================================================
 
+;; -----------------------------------------------------------------------------
 (defclass source ()
-  ())
+  ((name
+    :reader source-name
+    :initarg :name)
+   (path
+    :reader source-path
+    :initarg :path)
+   (line-breaks
+    :reader source-line-breaks
+    :initarg :line-breaks
+    :initform (make-line-break-table))
+   (text
+    :reader source-text
+    :initarg :text)))
+
+;; -----------------------------------------------------------------------------
+(defun make-source (code &key name path)
+  (if (pathnamep code)
+      (progn
+	(if (not path)
+	    (setf path code))
+	(setf code (read-string code))))
+  (if (and (not name) path)
+      (setf name (pathname-name path)))
+  (make-instance 'source
+		 :name name
+		 :path path
+		 :text code))
 
 ;; -----------------------------------------------------------------------------
 (defun make-source-region (left right)
@@ -405,17 +442,18 @@ to the previous line."
 ; 4xxxx are semantic warnings
 ; 5xxxx are implementation-specific errors
 ; 6xxxx are implementation-specific warnings
+; 7xxxx are implementation-specific infos
 
 ;; -----------------------------------------------------------------------------
-(defparameter *diagnostics-by-name*
+(defparameter *diagnostic-types-by-name*
   (make-hash-table))
 
 ;; -----------------------------------------------------------------------------
-(defparameter *diagnostics-by-code*
+(defparameter *diagnostic-types-by-code*
   (make-hash-table))
 
 ;; -----------------------------------------------------------------------------
-(defclass diagnostic ()
+(defclass diagnostic-type ()
   ((code
     :reader diagnostic-code
     :initarg :code)
@@ -427,193 +465,254 @@ to the previous line."
     :initarg :format)))
 
 ;; -----------------------------------------------------------------------------
-(defclass diagnostic-message ()
-  (diagnostic
-   format-args
-   source
-   source-region
-   ast))
+(defclass diagnostic ()
+  ((type
+    :reader diagnostic-type
+    :initarg :type)
+   (format-args
+    :reader diagnostic-args
+    :initarg :args)
+   (source
+    :reader diagnostic-source
+    :initarg :source)
+   (source-region
+    :reader diagnostic-source-region
+    :initarg :source-region)
+   (ast
+    :reader diagnostic-arg
+    :initarg :ast)))
 
 ;; -----------------------------------------------------------------------------
-(defmacro defdiagnostic (code name format)
+(defclass diagnostic-collection ()
+  (diagnostics
+   error-count
+   warning-count))
+
+;; -----------------------------------------------------------------------------
+(defmacro defdiagnostic-type (code name format)
   (with-gensyms (instance)
-  `(let ((,instance (make-instance 'diagnostic
+  `(let ((,instance (make-instance 'diagnostic-type
 				   :code ,code
 				   :name ',name
 				   :format ,format)))
-     (setf (gethash ,code *diagnostics-by-code*) ,instance)
-     (setf (gethash ',name *diagnostics-by-name*) ,instance))))
+     (setf (gethash ,code *diagnostic-types-by-code*) ,instance)
+     (setf (gethash ',name *diagnostic-types-by-name*) ,instance))))
 
 ;; -----------------------------------------------------------------------------
-(defdiagnostic 10001 block-not-closed "Expecting '}'")
-(defdiagnostic 10002 list-not-closed "Expecting ')'")
-(defdiagnostic 10003 separator-missing "Expecting ','")
-(defdiagnostic 10004 name-missing "Expecting identifier")
+(defdiagnostic-type 10001 block-not-closed "Expecting '}'")
+(defdiagnostic-type 10002 list-not-closed "Expecting ')'")
+(defdiagnostic-type 10003 separator-missing "Expecting ','")
+(defdiagnostic-type 10004 name-missing "Expecting identifier")
 
 ;; -----------------------------------------------------------------------------
-(defun get-diagnostic-by-code (code)
-  (gethash code *diagnostics-by-code*))
+(defun get-diagnostic-type-by-code (code)
+  (gethash code *diagnostic-types-by-code*))
 
 ;; -----------------------------------------------------------------------------
-(defun get-diagnostic-by-name (name)
-  (gethash name *diagnostics-by-name*))
+(defun get-diagnostic-type-by-name (name)
+  (gethash name *diagnostic-types-by-name*))
 
 ;; -----------------------------------------------------------------------------
-(defun get-diagnostic-expecting (expecting)
+(defun get-diagnostic-type-for-expecting (expecting)
   (cond ((equal expecting #\})
-	 (get-diagnostic-by-name 'block-not-closed))
+	 (get-diagnostic-type-by-name 'block-not-closed))
 	((equal expecting #\))
-	 (get-diagnostic-by-name 'list-not-closed))
+	 (get-diagnostic-type-by-name 'list-not-closed))
 	((equal expecting #\,)
-	 (get-diagnostic-by-name 'separator-missing))
+	 (get-diagnostic-type-by-name 'separator-missing))
 	((equal expecting 'parse-identifier)
-	 (get-diagnostic-by-name 'identifier-missing))
+	 (get-diagnostic-type-by-name 'identifier-missing))
+	((symbolp expecting)
+	 (let ((code (get expecting :diagnostic-code))
+	       (name (get expecting :diagnostic-name))
+	       (type (get expecting :diagnostic-type)))
+	   (if type
+	       type
+	       (if code
+		   (get-diagnostic-type-by-code code)
+		   (if name
+		       (get-diagnostic-type-by-name name)
+		       (error (format nil "Neither :diagnostic-code nor :diagnostic-name nor :diagnostic-type is set for ~a" expecting)))))))
 	(t
 	 (error (format nil "No diagnostic for expecting '~a'" expecting)))))
 
 ;; -----------------------------------------------------------------------------
-(defun make-diagnostic-message (diagnostic)
-  ())
+(defun make-diagnostic (diagnostic-type &key ast source source-region)
+  (cond ((numberp diagnostic-type)
+	 (setf diagnostic-type (get-diagnostic-type-by-code diagnostic-type)))
+	((stringp diagnostic-type)
+	 (setf diagnostic-type (get-diagnostic-type-by-name diagnostic-type))))
+  (if (and (not source-region) ast)
+      (setf source-region (ast-source-region ast)))
+  (assert (typep diagnostic-type 'diagnostic-type))
+  (make-instance 'diagnostic
+		 :type diagnostic-type
+		 :source source
+		 :source-region source-region))
 
 ;;;;============================================================================
 ;;;;	ASTs.
 ;;;;============================================================================
 
+;; -----------------------------------------------------------------------------
+;; Abstract base class for AST nodes.
 (defclass ast-node ()
   ((region
-    :reader source-region
+    :reader ast-source-region
     :initarg :source-region)))
 
+;; -----------------------------------------------------------------------------
+;; Node representing a parse error in the syntax tree.
 (defclass ast-error (ast-node)
-  ((message
-    :reader error-message
-    :initarg :message)))
+  ((diagnostic
+    :reader ast-error-diagnostic
+    :initarg :diagnostic)))
 
+;; -----------------------------------------------------------------------------
 (defclass ast-list (ast-node)
   ((nodes
-    :reader list-nodes
+    :reader ast-list-nodes
     :initarg :nodes
     :initform nil)))
 
+;; -----------------------------------------------------------------------------
+;; Representation of "::" denoting the global namespace.
 (defclass ast-global-qualifier (ast-node)
   ())
 
+;; -----------------------------------------------------------------------------
+;; A (potentially qualified) identifier.
 (defclass ast-identifier (ast-node)
   ((qualifier
-    :reader id-qualifier
+    :reader ast-id-qualifier
     :initarg qualifier
     :initform nil)
    (name
-    :reader id-name
+    :reader ast-id-name
     :initarg :name)))
 
+;; -----------------------------------------------------------------------------
 (defclass ast-modifier (ast-node)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-immutable-modifier (ast-modifier)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-mutable-modifier (ast-modifier)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-abstract-modifier (ast-modifier)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-include-modifier (ast-modifier)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-import-modifier (ast-modifier)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-instantiable-modifier (ast-modifier)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-clause (ast-node)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-statement (ast-node)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-expression (ast-node)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-definition (ast-node)
   ((attributes
-    :reader definition-attributes
+    :reader ast-definition-attributes
     :initarg :attributes)
    (modifiers
-    :reader definition-modifiers
+    :reader ast-definition-modifiers
     :initarg :modifiers)
    (name
-    :reader definition-name
+    :reader ast-definition-name
     :initarg :name)
    (type-parameters
-    :reader definition-type-parameters
+    :reader ast-definition-type-parameters
     :initarg :type-parameters)
    (value-parameters
-    :reader definition-value-parameters
+    :reader ast-definition-value-parameters
     :initarg :value-parameters)
    (clauses
-    :reader definition-clauses
+    :reader ast-definition-clauses
     :initarg :clauses)
    (type
-    :reader definition-type
+    :reader ast-definition-type
     :initarg :type)
    (value
-    :reader definition-value
+    :reader ast-definition-value
     :initarg :value)
    (body
-    :reader definition-body
+    :reader ast-definition-body
     :initarg :body)))
 
+;; -----------------------------------------------------------------------------
 (defclass ast-type-definition (ast-definition)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-object-definition (ast-type-definition)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-function-definition (ast-definition)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-field-definition (ast-function-definition)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-method-definition (ast-function-definition)
   ())
 
+;; -----------------------------------------------------------------------------
 (defclass ast-compilation-unit (ast-node)
   ((definitions
-    :reader unit-definitions
+    :reader ast-unit-definitions
     :initarg :definitions)))
 
 ;; -----------------------------------------------------------------------------
-(defun make-ast-error (scanner error &key start-position)
-  (if (not start-position)
-      (setf start-position (scanner-position scanner)))
-  ;;////TODO: diagnostic
+(defun make-ast-error (diagnostic)
   (make-instance 'ast-error
-		 :source-region (make-source-region start-position (scanner-position scanner))))
+		 :source-region (diagnostic-source-region diagnostic)
+		 :diagnostic diagnostic))
 
 ;; -----------------------------------------------------------------------------
 (defmethod initialize-instance :after ((id ast-identifier) &key)
   ;; Convert 'name' slot to symbol, if it isn't one already.
-  (let ((name (id-name id)))
+  (let ((name (ast-id-name id)))
     (if (not (symbolp name))
 	(setf (slot-value id 'name) (intern name)))))
 
 (deftest test-ast-identifier-initialize ()
   (let ((id (make-instance 'ast-identifier :name "test")))
-    (test (symbolp (id-name id)))))
+    (test (symbolp (ast-id-name id)))))
 
 ;; -----------------------------------------------------------------------------
 (defun identifier-to-string (id)
-  (let ((qualifier (id-qualifier id)))
+  (let ((qualifier (ast-id-qualifier id)))
     (cond ((not qualifier)
-	   (symbol-name (id-name id)))
+	   (symbol-name (ast-id-name id)))
 	  ((typep qualifier 'ast-global-qualifier)
-	   (concatenate 'string "::" (symbol-name (id-name id))))
+	   (concatenate 'string "::" (symbol-name (ast-id-name id))))
 	  (t
-	   (concatenate 'string (identifier-to-string qualifier) "::" (symbol-name (id-name id)))))))
+	   (concatenate 'string (identifier-to-string qualifier) "::" (symbol-name (ast-id-name id)))))))
 
 (deftest test-identifier-to-string ()
   (let ((id1 (make-instance 'ast-identifier :name "test")))
@@ -625,10 +724,10 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun definition-has-modifier-p (ast type)
-  (let ((modifiers (definition-modifiers ast)))
+  (let ((modifiers (ast-definition-modifiers ast)))
     (if (not modifiers)
 	nil
-	(find-if (lambda (modifier) (typep modifier type)) (list-nodes modifiers)))))
+	(find-if (lambda (modifier) (typep modifier type)) (ast-list-nodes modifiers)))))
 
 (deftest test-definition-has-modifier-p ()
   (let ((abstract-ast (parse-result-value (parse-definition (make-string-scanner "abstract type Foobar;") (make-instance 'parser-state))))
@@ -650,6 +749,7 @@ to the previous line."
 ;;;;	Naming Conventions.
 ;;;;============================================================================
 
+;; -----------------------------------------------------------------------------
 (defclass naming-convention ()
   (prefix
    suffix
@@ -657,32 +757,45 @@ to the previous line."
    middle-character-case
    last-character-case))
 
+;; -----------------------------------------------------------------------------
 (defgeneric normalize-name (name convention))
 
 ;;;;============================================================================
 ;;;;	Scanners.
 ;;;;============================================================================
 
+;; -----------------------------------------------------------------------------
 (defclass scanner ()
   ((position
     :initform 0
     :accessor scanner-position)))
 
+;; -----------------------------------------------------------------------------
 (defclass string-scanner (scanner)
   ((string
     :initarg :string
     :initform "")))
 
+;; -----------------------------------------------------------------------------
 (defclass stream-scanner (scanner)
   ((stream
     :initarg :stream)
    (stream-length
     :initarg :length)))
 
+;; -----------------------------------------------------------------------------
 (defgeneric scanner-at-end-p (scanner))
+
+;; -----------------------------------------------------------------------------
 (defgeneric scanner-peek-next (scanner))
+
+;; -----------------------------------------------------------------------------
 (defgeneric scanner-read-next (scanner))
+
+;; -----------------------------------------------------------------------------
 (defgeneric scanner-match (scanner token))
+
+;; -----------------------------------------------------------------------------
 (defgeneric scanner-match-if (scanner function))
 
 ;; -----------------------------------------------------------------------------
@@ -831,6 +944,40 @@ to the previous line."
 ;;;;	Parsers.
 ;;;;============================================================================
 
+;; The parsers here are a mixture of plain recursive descent and
+;; combinators.  Each parser implements a specific pattern that it
+;; will recognize and from which it will derive an optional value.  As
+;; a side-effect of recognizing a pattern, it will advance the
+;; position in the input sequence to the first position after the
+;; match.
+;;
+;; All parsers have to either produce a full match or produce no match
+;; at all.
+;;
+;; If a parser runs into a situation where it can partially recognize
+;; a prefix of the input but then comes across input that doesn't
+;; match what is expected, it can
+;;
+;;  a) either abort, reset the input position, and return a no-match, or
+;;  b) apply error repair and return a match.
+;;
+;; Error repair is usually implemented by falling back to parsers that
+;; recognize a superset of valid input but produce diagnostics and
+;; error nodes as side- effects.  In that sense, there are two
+;; languages implemented by the parsers: one that is Flux and one that
+;; is a superset of Flux trying to recognize as much of Flux as
+;; possible in otherwise invalid input.
+;;
+;; Diagnostics produced by error handling will be stored on the parser
+;; state.  Error nodes are normal AST nodes that refer to the
+;; diagnostics and that are made part of the AST like any other type
+;; of node.
+;;
+;; Parsers follow a longest-prefix matching strategy, i.e. as long as
+;; a prefix matches their expected pattern, they will produce a match.
+;; They will, however, go for the longest possible prefix they can
+;; match.
+
 ;; -----------------------------------------------------------------------------
 (defmacro test-parser (function string &key (is-match-p :dont-test) end-position state expected-type line-breaks-at checks)
   (with-gensyms (res scanner end-position-value expected-type-value state-value line-breaks-at-value)
@@ -852,8 +999,6 @@ to the previous line."
 	 ,(cond
 	   ((eq is-match-p :dont-test)
 	    t)
-	   ((eq is-match-p :partial)
-	    `(test (parse-result-partial-match-p ,res)))
 	   (is-match-p
 	    `(test (parse-result-match-p ,res)))
 	   (t
@@ -872,9 +1017,10 @@ to the previous line."
 	     (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value)))
 
 	 ;; Check AST.
-	 (let ((ast (parse-result-value ,res)))
-	   (setf ast ast) ; Silence warning if check-ast is nil.
-	   ,@checks)))))
+	 ,(if (> (length checks) 0)
+	      `(let ((ast (parse-result-value ,res)))
+		 (setf ast ast) ; Silence warning if check-ast is nil.
+		 ,@checks))))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* :no-match)
@@ -887,31 +1033,20 @@ to the previous line."
   ((line-break-table
     :initform (make-line-break-table)
     :reader line-break-table)
-   errors))
+   diagnostics))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
-  (and (not (parse-result-no-match-p result))
-       (not (parse-result-partial-match-p result))))
+  (not (eq result *parse-result-no-match*)))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-no-match-p (result)
   (eq result *parse-result-no-match*))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-result-partial-match-p (result)
-  (listp result))
-
-;; -----------------------------------------------------------------------------
 (defun parse-result-value (result)
-  (if (parse-result-partial-match-p result)
-      (second result)
-      result))
-
-;; -----------------------------------------------------------------------------
-(defun parse-result-diagnostic (result)
-  (assert (parse-result-partial-match-p result))
-  (first result))
+  (assert (parse-result-match-p result))
+  result)
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match (&optional value)
@@ -922,10 +1057,6 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-result-no-match ()
   *parse-result-no-match*)
-
-;; -----------------------------------------------------------------------------
-(defun parse-result-partial-match (diagnostic value)
-  (cons diagnostic value))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-whitespace (scanner state)
@@ -1001,13 +1132,20 @@ to the previous line."
   (test-parse-whitespace-consume-multi-line-comments))
 
 ;; -----------------------------------------------------------------------------
+;; Combination that makes sure the given parser consumes all available input.
+;; Otherwise produces a parse error.
+(defmacro parse-all-input (parser-name scanner state)
+  ())
+
+;; -----------------------------------------------------------------------------
 ;; Combinator that turns another parser into a list parser.  This combinator can be broken
 ;; down into more atomic combinators that can be composed to create the same effect as this
-;; combinator here yet in a more flexible manner.  However, 
+;; combinator here yet in a more flexible manner.  However, it works nicely for the parsers
+;; we have.
 (defmacro parse-list (parser-name scanner state &key start-delimiter end-delimiter separator)
   ;; List must either be undelimited or have both a start and end
   ;; delimiter.
-  (with-gensyms (scanner-value state-value list start-position element parse-list-block)
+  (with-gensyms (scanner-value state-value list start-position element parse-list-block result)
     `(block ,parse-list-block
        (let ((,scanner-value ,scanner)
 	     (,state-value ,state))
@@ -1042,10 +1180,15 @@ to the previous line."
 		 ;; Consume separator or terminate on end-delimiter.
 		 ,(cond
 
-		   ((and separator (not end-delimiter))	
+		   ;; In a list with only separators and no end-delimiter,
+		   ;; we stop as soon as an element isn't followed by a separator.
+		   ((and separator (not end-delimiter))
 		    `(if (not (scanner-match ,scanner-value ,separator))
 			 (return)))
 
+		   ;; In a list with both separators and an end-delimiter, we
+		   ;; continue if we see a separator and we stop if we see an
+		   ;; end-delimiter.
 		   ((and separator end-delimiter)
 		    `(if (scanner-match ,scanner-value ,separator)
 			 t
@@ -1058,6 +1201,16 @@ to the previous line."
 	       
 		 ,(if separator
 		      `(cond
+
+			 ;; If we don't have an end-delimiter and we've already read
+			 ;; one or more elements, we're we missing an element.
+			 ((and ,(not end-delimiter)
+			       ,list)
+			  (let* ((diagnostic (make-diagnostic (get-diagnostic-type-for-expecting ',parser-name)))
+				 (ast (make-ast-error diagnostic)))
+			    (not-implemented "error handling")
+			    (setf ,list (cons ast ,list))
+			    (return)))
 
 			 ;; If next up is a separator, we're missing an element.
 			 ((scanner-match ,scanner-value ,separator)
@@ -1074,16 +1227,12 @@ to the previous line."
 		      `(if (not (scanner-match ,scanner-value ,end-delimiter))
 			   (not-implemented "error; expecting element or terminator")))
 
-		 (return))
-
-		;; Handle partial match.
-		((parse-result-partial-match-p ,element)
-		 (not-implemented "partial match"))))
+		 (return))))
 		  
 	   (setf ,list (nreverse ,list))
-	   (parse-result-match (make-instance 'ast-list 
-					      :source-region (make-source-region ,start-position (scanner-position ,scanner-value))
-					      :nodes ,list)))))))
+	   (make-instance 'ast-list 
+			  :source-region (make-source-region ,start-position (scanner-position ,scanner-value))
+			  :nodes ,list))))))
 
 (deftest test-parse-list ()
   (labels
@@ -1099,6 +1248,8 @@ to the previous line."
        (parse-comma-separated-abs (scanner state)
 	 (parse-list parse-ab scanner state :separator #\,)))
    
+    (setf (get 'parse-ab :diagnostic-type) (make-instance 'diagnostic-type :code 80000 :name "ab"))
+
     (with-test-name test-no-match
       (test-parser parse-comma-separated-abs "foo" :is-match-p nil :end-position 0))
 
@@ -1167,8 +1318,8 @@ to the previous line."
 (deftest test-parse-identifier-simple-name ()
   (test-parser parse-identifier "test"
 	       :end-position 4 :is-match-p t :expected-type 'ast-identifier
-	       :checks ((test-equal (intern "test") (id-name ast))
-			(test-equal nil (id-qualifier ast)))))
+	       :checks ((test-equal (intern "test") (ast-id-name ast))
+			(test-equal nil (ast-id-qualifier ast)))))
 
 (defsuite test-parse-identifier ()
   (test-parse-identifier-simple-name))
@@ -1318,7 +1469,7 @@ to the previous line."
 (deftest test-parse-definition-simple-type ()
   (test-parser parse-definition "type Foobar;"
 	       :is-match-p t :expected-type 'ast-type-definition
-	       :checks ((test-equal "Foobar" (identifier-to-string (definition-name ast))))))
+	       :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast))))))
 
 (deftest test-parse-definition-rejects-non-definition ()
   (test-parser parse-definition "Foobar" :is-match-p nil))
@@ -1341,14 +1492,14 @@ to the previous line."
 (deftest test-parse-compilation-unit-empty ()
   (test-parser parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit
 	       :checks
-	       ((test-type 'ast-list (unit-definitions ast))
-		(test-equal nil (list-nodes (unit-definitions ast))))))
+	       ((test-type 'ast-list (ast-unit-definitions ast))
+		(test-equal nil (ast-list-nodes (ast-unit-definitions ast))))))
 
 (deftest test-parse-compilation-unit-simple ()
   (test-parser parse-compilation-unit "type Foobar; type Barfoo;" :is-match-p t :expected-type 'ast-compilation-unit
 	       :checks
-	       ((test-type 'ast-list (unit-definitions ast))
-		(test-equal 2 (length (list-nodes (unit-definitions ast)))))))
+	       ((test-type 'ast-list (ast-unit-definitions ast))
+		(test-equal 2 (length (ast-list-nodes (ast-unit-definitions ast)))))))
 
 (defsuite test-parse-compilation-unit ()
   (test-parse-compilation-unit-empty)
@@ -1425,8 +1576,8 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition) state)
-  (let* ((name (identifier-to-lisp (definition-name ast)))
-	 (superclasses (if (not (definition-type ast))
+  (let* ((name (identifier-to-lisp (ast-definition-name ast)))
+	 (superclasses (if (not (ast-definition-type ast))
 			   (if (not (eq name *object-class-name*))
 			       (list *object-class-name*)
 			       ())
@@ -1434,7 +1585,7 @@ to the previous line."
 	 (class `(defclass ,name ,superclasses ())))
     (append-forms state (list class))
     (if (definition-abstract-p ast)
-	(let ((error-message (format nil "Cannot instantiate abstract class ~a!" (identifier-to-string (definition-name ast)))))
+	(let ((error-message (format nil "Cannot instantiate abstract class ~a!" (identifier-to-string (ast-definition-name ast)))))
 	  (append-forms state
 			(list `(defmethod make-instance :before ((instance ,name) &key)
 				 (error ,error-message))))))
@@ -1454,7 +1605,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-function-definition) state)
-  (let* ((name (identifier-to-lisp (definition-name ast)))
+  (let* ((name (identifier-to-lisp (ast-definition-name ast)))
 	 (method `(defmethod ,name () ())))
     (append-forms state (list method))
     method))
@@ -1489,7 +1640,7 @@ to the previous line."
 
   ;; Emit definitions.
   (mapc (lambda (definition) (emit definition state))
-	(list-nodes (unit-definitions ast)))
+	(ast-list-nodes (ast-unit-definitions ast)))
 
   (emitter-result state))
 
