@@ -27,8 +27,13 @@
 ;;;;	Test Framework.
 ;;;;============================================================================
 
+;; -----------------------------------------------------------------------------
 ;////TODO: turn this into a stack and print suites/tests as we enter them (instead of for each single test)
 (defvar *test-name* nil)
+
+;; -----------------------------------------------------------------------------
+;; List of test suites.
+(defparameter *test-suites* nil)
 
 ;; -----------------------------------------------------------------------------
 (defun report-result (result form)
@@ -117,7 +122,15 @@
 (defmacro defsuite (name parameters &body body)
   `(deftest-internal ,name ,parameters
      (combine-results
-       ,@body)))
+       ,@body))
+  `(setf *test-suites* (cons #',name *test-suites*)))
+
+;; -----------------------------------------------------------------------------
+;////TODO: print test summary at end
+(defun run-unit-tests (&key terminate-on-failure)
+  (if terminate-on-failure
+      (every #'funcall *test-suites*)
+      (reduce (lambda (result suite) (and (funcall suite) result)) *test-suites* :initial-value t)))
 
 ;;;;============================================================================
 ;;;;	File Utilities.
@@ -1005,32 +1018,36 @@ to the previous line."
 
 	 ;////TODO: automatically check region of parsed AST
 
-	 ;; Check match, if requested.
-	 ,(cond
-	   ((eq is-match-p :dont-test)
-	    t)
-	   (is-match-p
-	    `(test (parse-result-match-p ,res)))
-	   (t
-	    `(test (parse-result-no-match-p ,res))))
+	 (combine-results
 
-	 ;; Check end position, if requested.
-	 (if ,end-position-value
-	     (test-equal ,end-position-value (scanner-position ,scanner)))
+	   ;; Check match, if requested.
+	   ,(cond
+	     ((eq is-match-p :dont-test)
+	      t)
+	     (is-match-p
+	      `(test (parse-result-match-p ,res)))
+	     (t
+	      `(test (parse-result-no-match-p ,res))))
 
-	 ;; Check value type, if requested.
-	 (if ,expected-type-value
-	     (test-type ,expected-type-value (parse-result-value ,res)))
+	   ;; Check end position, if requested.
+	   (if ,end-position-value
+	       (test-equal ,end-position-value (scanner-position ,scanner))
+	       t)
+
+	   ;; Check value type, if requested.
+	   (if ,expected-type-value
+	       (test-type ,expected-type-value (parse-result-value ,res))
+	       t)
 	
-	 ;; Check line breaks, if requested.
-	 (if ,line-breaks-at-value
-	     (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value)))
+	   ;; Check line breaks, if requested.
+	   (if ,line-breaks-at-value
+	       (test-sequence-equal ,line-breaks-at-value (line-break-table ,state-value))
+	       t)
 
-	 ;; Check AST.
-	 ,(if (> (length checks) 0)
-	      `(let ((ast (parse-result-value ,res)))
-		 (setf ast ast) ; Silence warning if check-ast is nil.
-		 ,@checks))))))
+	   ;; Check AST.
+	   ,(if (> (length checks) 0)
+		`(let ((ast (parse-result-value ,res)))
+		   (combine-results ,@checks))))))))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *parse-result-no-match* :no-match)
@@ -1138,7 +1155,7 @@ to the previous line."
 (deftest test-parse-whitespace-consume-multi-line-comments ()
   (test-parser parse-whitespace (format nil " /* foo /* ~C bar */ */foo" #\Newline) :is-match-p t :end-position 22 :line-breaks-at '(0 12)))
 
-(defsuite test-parse-whitespace ()
+(deftest test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
   (test-parse-whitespace-consumes-whitespace)
   (test-parse-whitespace-consumes-single-line-comments)
@@ -1294,7 +1311,7 @@ to the previous line."
 	      (make-instance 'ast-immutable-modifier :source-region (parse-region))))
 	    (t (parse-result-no-match))))))
 
-(defsuite test-parse-modifier ()
+(deftest test-parse-modifier ()
   (test-parser parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
   (test-parser parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier))
 
@@ -1332,7 +1349,7 @@ to the previous line."
 	       :checks ((test-equal (intern "test") (ast-id-name ast))
 			(test-equal nil (ast-id-qualifier ast)))))
 
-(defsuite test-parse-identifier ()
+(deftest test-parse-identifier ()
   (test-parse-identifier-simple-name))
 
 ;; -----------------------------------------------------------------------------
@@ -1485,7 +1502,7 @@ to the previous line."
 (deftest test-parse-definition-rejects-non-definition ()
   (test-parser parse-definition "Foobar" :is-match-p nil))
 
-(defsuite test-parse-definition ()
+(deftest test-parse-definition ()
   (test-parse-definition-simple-type)
   (test-parse-definition-rejects-non-definition))
 
@@ -1512,7 +1529,7 @@ to the previous line."
 	       ((test-type 'ast-list (ast-unit-definitions ast))
 		(test-equal 2 (length (ast-list-nodes (ast-unit-definitions ast)))))))
 
-(defsuite test-parse-compilation-unit ()
+(deftest test-parse-compilation-unit ()
   (test-parse-compilation-unit-empty)
   (test-parse-compilation-unit-simple))
 
@@ -1673,6 +1690,25 @@ to the previous line."
   (test-emit-compilation-unit))
 
 ;;;;============================================================================
+;;;;	Regression Testing.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+
+;; -----------------------------------------------------------------------------
+(defun run-regression-tests ()
+  (flet ((test-file (pathname)
+	   (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
+	       (progn
+		 (print (format nil "--- ~a ---" pathname))
+		 (let ((code (flux-to-lisp pathname)))
+		   (pprint code)
+		   ;;////TODO: probably want something more elaborate than just evaluating the generated code
+		   (mapc #'eval code))))))
+    (walk-directory *regression-suite-directory* #'test-file :directories nil))
+  (in-package :flux))
+
+;;;;============================================================================
 ;;;;	Entry Points.
 ;;;;============================================================================
 
@@ -1729,27 +1765,3 @@ the resulting Lisp expression."
     (values
      (emitter-result emitter-state)
      asts)))
-
-;; -----------------------------------------------------------------------------
-(defun run-regression-tests ()
-  (flet ((test-file (pathname)
-	   (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
-	       (progn
-		 (print (format nil "--- ~a ---" pathname))
-		 (let ((code (flux-to-lisp pathname)))
-		   (pprint code)
-		   ;;////TODO: probably want something more elaborate than just evaluating the generated code
-		   (mapc #'eval code))))))
-    (walk-directory *regression-suite-directory* #'test-file :directories nil))
-  (in-package :flux))
-
-;; -----------------------------------------------------------------------------
-;////TODO: print test summary at end
-(defun run-unit-tests ()
-  (test-asts)
-  (test-scanners)
-  (test-parsers)
-  (test-emitters)
-  (test-utilities)
-  (test-text-utilities)
-  (test-parse))
