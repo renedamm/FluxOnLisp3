@@ -241,7 +241,8 @@
       (let* ((length-remaining (- (file-length stream-or-pathname)
 				  (file-position stream-or-pathname)))
 	     (data (make-string length-remaining)))
-	(read-sequence data stream-or-pathname))))
+	(read-sequence data stream-or-pathname)
+	data)))
 
 ;;;;============================================================================
 ;;;;	Utilities.
@@ -291,7 +292,10 @@
     :initform (make-line-break-table))
    (text
     :reader source-text
-    :initarg :text)))
+    :initarg :text)
+   (diagnostics
+    :reader source-diagnostics
+    :initform (make-instance 'diagnostic-collection))))
 
 ;; -----------------------------------------------------------------------------
 (defun make-source (code &key name path)
@@ -484,9 +488,15 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass diagnostic-collection ()
-  (diagnostics
-   error-count
-   warning-count))
+  ((diagnostics
+    :reader diagnostics
+    :initform (make-array 10 :adjustable t :fill-pointer 0))
+   (error-count
+    :reader diagnostics-error-count
+    :initform 0)
+   (warning-count
+    :reader diagnostics-warning-count
+    :initform 0)))
 
 ;; -----------------------------------------------------------------------------
 (defmacro defdiagnostic-type (code name format)
@@ -1031,9 +1041,12 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass parser-state ()
   ((line-break-table
+    :reader line-break-table
     :initform (make-line-break-table)
-    :reader line-break-table)
-   diagnostics))
+    :initarg :line-break-table)
+   (diagnostics
+    :reader parser-diagnostics
+    :initarg :diagnostics)))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
@@ -1236,28 +1249,26 @@ to the previous line."
 
 (deftest test-parse-list ()
   (labels
-      ;; Define a dummy parser that matches "ab".
-      ((parse-ab (scanner state)
+      ;; Define a dummy parser that matches "a".
+      ((parse-a (scanner state)
 	 (if (scanner-match scanner #\a)
-	     (if (scanner-match scanner #\b)
-		 (parse-result-match (make-instance 'ast-node :source-region (make-source-region (- (scanner-position scanner) 2) (scanner-position scanner))))
-		 (parse-result-partial-match "Expecting 'b'" nil))
+	     (parse-result-match (make-instance 'ast-node :source-region (make-source-region (1- (scanner-position scanner)) (scanner-position scanner))))
 	     (parse-result-no-match)))
 
-       ;; Parser that matches "ab, ab, ab...".
-       (parse-comma-separated-abs (scanner state)
-	 (parse-list parse-ab scanner state :separator #\,)))
+       ;; Parser that matches "a, a, a...".
+       (parse-comma-separated-as (scanner state)
+	 (parse-list parse-a scanner state :separator #\,)))
    
-    (setf (get 'parse-ab :diagnostic-type) (make-instance 'diagnostic-type :code 80000 :name "ab"))
+    (setf (get 'parse-a :diagnostic-type) (make-instance 'diagnostic-type :code 80000 :name "a"))
 
     (with-test-name test-no-match
-      (test-parser parse-comma-separated-abs "foo" :is-match-p nil :end-position 0))
+      (test-parser parse-comma-separated-as "foo" :is-match-p nil :end-position 0))
 
     (with-test-name test-single-element
-      (test-parser parse-comma-separated-abs "ab" :is-match-p t :expected-type 'ast-list :end-position 2))
+      (test-parser parse-comma-separated-as "a" :is-match-p t :expected-type 'ast-list :end-position 1))
 
     (with-test-name test-comma-separated
-      (test-parser parse-comma-separated-abs "ab, ab, ab]" :is-match-p t :expected-type 'ast-list :end-position 10))))
+      (test-parser parse-comma-separated-as "a, a, a]" :is-match-p t :expected-type 'ast-list :end-position 7))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-string-literal ()
@@ -1671,34 +1682,41 @@ to the previous line."
 ;; (if pointing to a file, contents of file are parsed; if pointing to a directory, all Flux
 ;; source files in the directory and any of its subdirectories are parsed), a scanner (fed
 ;; directly into the parser), or a character stream (parsed as Flux code).
-(defun parse (code)
-  (cond ((typep code 'scanner)
-	 (let* ((state (make-instance 'parser-state))
-		(result (parse-compilation-unit code state)))
-	   (if (parse-result-no-match-p result)
-	       (error "Parse error") ;////TODO: spill diagnostics
-	       (list (parse-result-value result)))))
-	((stringp code)
-	 (parse (make-string-scanner code)))
-	((streamp code)
-	 (parse (make-stream-scanner code)))
-	((listp code)
-	 (mapcan #'parse code))
-	((pathnamep code)
-	 (if (directory-pathname-p code)
-	     (not-implemented "Compiling entire directories")
-	     (with-open-file (file code)
-	       (parse (make-stream-scanner file)))))
-	(t
-	 (error (format nil "Unrecognized type of code unit: ~a" code)))))
+(defgeneric parse (code &key))
+
+(defsuite test-parse ()
+  (test-parse-code-source)
+  (test-parse-code-string))
+
+;; -----------------------------------------------------------------------------
+(defmethod parse ((code source) &key)
+  (let* ((state (make-instance 'parser-state
+			       :line-break-table (source-line-breaks code)
+			       :diagnostics (source-diagnostics code)))
+	 (scanner (make-string-scanner (source-text code)))
+	 (result (parse-compilation-unit scanner state)))
+    (list (parse-result-value result))))
+
+(deftest test-parse-code-source ()
+  (let ((source (make-source "type Foobar;")))
+    (destructuring-bind (ast)
+	(parse source)
+      (test (typep ast 'ast-compilation-unit)))))
+
+;; -----------------------------------------------------------------------------
+(defmethod parse ((code string) &key)
+  (parse (make-source code)))
 
 (deftest test-parse-code-string ()
   (destructuring-bind (ast)
       (parse "type Foobar;")
     (test (typep ast 'ast-compilation-unit))))
 
-(defsuite test-parse ()
-  (test-parse-code-string))
+;; -----------------------------------------------------------------------------
+(defmethod parse ((code pathname) &key)
+  (if (directory-pathname-p code)
+      (not-implemented "Compiling entire directories")
+      (parse (make-source code))))
 
 ;; -----------------------------------------------------------------------------
 (defun flux-to-lisp (code &key package-name)
@@ -1708,7 +1726,9 @@ the resulting Lisp expression."
 	(asts (parse code)))
     ;////TODO: need to do a pre-pass to gather all types
     (mapc (lambda (ast) (emit ast emitter-state)) asts)
-    (emitter-result emitter-state)))
+    (values
+     (emitter-result emitter-state)
+     asts)))
 
 ;; -----------------------------------------------------------------------------
 (defun run-regression-tests ()
