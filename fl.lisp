@@ -715,6 +715,10 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-module-definition (ast-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ast-compilation-unit (ast-node)
   ((definitions
     :reader ast-unit-definitions
@@ -1100,7 +1104,9 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-result-value (result)
   (assert (parse-result-match-p result))
-  result)
+  (if (eq result *parse-result-no-value*)
+      nil
+      result))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match (&optional value)
@@ -1502,7 +1508,10 @@ to the previous line."
 	   (if (not (scanner-match scanner #\;))
 	       (not-implemented "parse error; expecting semicolon")))
 	  (t
-	   (setf body (parse-statement-list scanner state))))
+	   (setf body
+		 (if (eq 'ast-module-definition definition-class)
+		     (parse-definition-list scanner state)
+		     (parse-statement-list scanner state)))))
 
     ;; Create AST node.
     (setf ast (make-instance definition-class
@@ -1530,6 +1539,10 @@ to the previous line."
 (deftest test-parse-definition ()
   (test-parse-definition-simple-type)
   (test-parse-definition-rejects-non-definition))
+
+;; -----------------------------------------------------------------------------
+(defun parse-definition-list (scanner state)
+  (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\}))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-compilation-unit (scanner state)
@@ -1582,7 +1595,7 @@ to the previous line."
    (package-name
     :reader emitter-package-name
     :initarg :package-name
-    :initform "flux-program")
+    :initform :flux-program)
    functions
    types))
 
@@ -1681,11 +1694,17 @@ to the previous line."
   (not-implemented "emitting fields"))
 
 ;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-module-definition) state)
+  (let ((body (ast-definition-body ast)))
+    (if body
+	(mapcar (lambda (definition) (emit definition state)) (ast-list-nodes body)))))
+
+;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-compilation-unit) state)
   "Emit code for compilation unit."
 
   ;; Emit prologue.
-  (let ((package-name (intern (emitter-package-name state) :keyword)))
+  (let ((package-name (emitter-package-name state)))
     (append-forms state
 		  `((in-package :cl-user)
 		    (defpackage ,package-name
@@ -1704,7 +1723,7 @@ to the previous line."
       ""
       #'parse-compilation-unit
       (&rest code)
-    (test (find `(in-package ,(intern "flux-program" :keyword)) code :test #'equal))))
+    (test (find `(in-package :flux-program) code :test #'equal))))
 
 (defsuite test-emit-compilation-unit ()
   (test-emit-compilation-unit-prologue))
@@ -1847,9 +1866,7 @@ to the previous line."
        (parse-whitespace scanner state)
        (if (not (scanner-match-sequence scanner "*/"))
 	   (not-implemented "Unterminated regression spec")))
-    (if (not list)
-	(parse-result-no-match)
-	(parse-result-match list))))
+    (parse-result-match list)))
 
 (deftest test-parse-spec-list ()
   (test-parser parse-spec-list "/*#TYPE: Foobar */" :is-match-p t :expected-type 'list
@@ -1870,16 +1887,20 @@ to the previous line."
 	   (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
 	       (progn
 		 (print (format nil "--- ~a ---" pathname))
-		 (let* ((source (make-source pathname))
-			(regression-specs (parse-spec-list (make-string-scanner (source-text source)) (make-instance 'parser-state)))
-			(emitter-state (make-instance 'emitter-state))
+		 (let* ((test-package-name :flux-regression-tests)
+			(source (make-source pathname))
+			(regression-specs (parse-result-value (parse-spec-list (make-string-scanner (source-text source)) (make-instance 'parser-state))))
+			(emitter-state (make-instance 'emitter-state
+						      :package-name test-package-name))
 			ast
 			code)
 		   (parse source)
 		   (setf code (emit (source-ast source) emitter-state))
 		   (pprint code)
 		   (mapc (lambda (spec) (verify-no-regression (regression-spec-type spec) spec source emitter-state code)) regression-specs)
-		   (mapc #'eval code))))))
+		   (mapc #'eval code)
+		   (in-package :flux)
+		   (delete-package test-package-name))))))
     (walk-directory *regression-suite-directory* #'test-file :directories nil))
   (in-package :flux))
 
@@ -1933,14 +1954,14 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun translate (source &key package-name)
-  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name "flux-program"))))
+  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name :flux-program))))
     (emit (source-ast source) emitter-state)))
 
 ;; -----------------------------------------------------------------------------
 (defun flux-to-lisp (code &key package-name)
   "Parses one or more units of Flux code and then translates them to Lisp.  Returns \
 the resulting Lisp expression."
-  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name "flux-program")))
+  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name :flux-program)))
 	(asts (parse code)))
     ;////TODO: need to do a pre-pass to gather all types
     (mapc (lambda (ast) (emit ast emitter-state)) asts)
