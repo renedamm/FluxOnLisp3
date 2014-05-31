@@ -966,6 +966,28 @@ to the previous line."
     (test-equal 3 (scanner-position scanner))))
 
 ;; -----------------------------------------------------------------------------
+(defun scanner-match-keyword (scanner token-list)
+  (let ((saved-position (scanner-position scanner)))
+    (if (and (scanner-match-sequence scanner token-list)
+	     (or (scanner-at-end-p scanner)
+		 (not (alphanumericp (scanner-peek-next scanner)))))
+	t
+	(progn
+	  (setf (scanner-position scanner) saved-position)
+	  nil))))
+
+(deftest test-scanner-match-keyword ()
+  (let ((scanner (make-string-scanner "foobar")))
+    (test (not (scanner-match-keyword scanner "foo")))
+    (test-equal 0 (scanner-position scanner)))
+  (let ((scanner (make-string-scanner "foobar ")))
+    (test (scanner-match-keyword scanner "foobar"))
+    (test-equal 6 (scanner-position scanner)))
+  (let ((scanner (make-string-scanner "foo")))
+    (test (scanner-match-keyword scanner "foo"))
+    (test-equal 3 (scanner-position scanner))))
+
+;; -----------------------------------------------------------------------------
 (defmethod (setf scanner-position) :before (position (scanner string-scanner))
   (if (or (< position 0)
 	  (> position (length (slot-value scanner 'string))))
@@ -982,6 +1004,7 @@ to the previous line."
 (defsuite test-scanners ()
   (test-scanner-match)
   (test-scanner-match-sequence)
+  (test-scanner-match-keyword)
   (test-stream-scanner-at-end-p)
   (test-stream-scanner-peek-next)
   (test-string-scanner-at-end-p)
@@ -1332,18 +1355,25 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier (scanner state)
   (let ((saved-position (scanner-position scanner)))
-    (flet ((parse-region () (make-source-region saved-position (scanner-position scanner))))
-      (cond ((scanner-match-sequence scanner "abstract")
-	     (parse-result-match
-	      (make-instance 'ast-abstract-modifier :source-region (parse-region))))
-	    ((scanner-match-sequence scanner "immutable")
-	     (parse-result-match
-	      (make-instance 'ast-immutable-modifier :source-region (parse-region))))
-	    (t (parse-result-no-match))))))
+    (macrolet ((match (modifier ast-type)
+		 `(if (scanner-match-keyword scanner ,modifier)
+		      (return-from parse-modifier (parse-result-match
+						   (make-instance ,ast-type
+								  :source-region (make-source-region saved-position (scanner-position scanner))))))))
+      (match "abstract" 'ast-abstract-modifier)
+      (match "immutable" 'ast-immutable-modifier)
+      (match "mutable" 'ast-mutable-modifier)
+      (match "import" 'ast-import-modifier)
+      (match "include" 'ast-include-modifier)
+      (parse-result-no-match))))
 
 (deftest test-parse-modifier ()
+  (test-parser parse-modifier "importA" :is-match-p nil)
   (test-parser parse-modifier "abstract[" :end-position 8 :is-match-p t :expected-type 'ast-abstract-modifier)
-  (test-parser parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier))
+  (test-parser parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier)
+  (test-parser parse-modifier "mutable" :end-position 7 :is-match-p t :expected-type 'ast-mutable-modifier)
+  (test-parser parse-modifier "import?" :end-position 6 :is-match-p t :expected-type 'ast-import-modifier)
+  (test-parser parse-modifier "include%" :end-position 7 :is-match-p t :expected-type 'ast-include-modifier))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier-list (scanner state)
@@ -1460,19 +1490,19 @@ to the previous line."
     ;;////FIXME: this needs to match keyword+whitespace, not just keyword
     ;; Parse definition kind.
     (parse-whitespace scanner state)
-    (setf definition-class (cond ((scanner-match-sequence scanner "method")
+    (setf definition-class (cond ((scanner-match-keyword scanner "method")
 				 'ast-method-definition)
-				((scanner-match-sequence scanner "field")
+				((scanner-match-keyword scanner "field")
 				 'ast-field-definition)
-				((scanner-match-sequence scanner "type")
+				((scanner-match-keyword scanner "type")
 				 'ast-type-definition)
-				((scanner-match-sequence scanner "object")
+				((scanner-match-keyword scanner "object")
 				 'ast-object-definition)
-				((scanner-match-sequence scanner "function")
+				((scanner-match-keyword scanner "function")
 				 'ast-function-definition)
-				((scanner-match-sequence scanner "features")
+				((scanner-match-keyword scanner "features")
 				 'ast-features-definition)
-				((scanner-match-sequence scanner "module")
+				((scanner-match-keyword scanner "module")
 				 'ast-module-definition)
 				(t
 				 (return-from parse-definition (parse-result-no-match)))))
