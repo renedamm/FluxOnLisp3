@@ -316,7 +316,9 @@
     :initarg :text)
    (diagnostics
     :reader source-diagnostics
-    :initform (make-instance 'diagnostic-collection))))
+    :initform (make-instance 'diagnostic-collection))
+   (ast
+    :accessor source-ast)))
 
 ;; -----------------------------------------------------------------------------
 (defun make-source (code &key name path)
@@ -1721,21 +1723,21 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass regression-spec ()
   ((type
-    :reader regression-type
+    :reader regression-spec-type
     :initarg :type)
    (data
-    :reader regression-data
+    :reader regression-spec-data
     :initarg :data)))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric verify-no-regression (regression-spec-type regression-spec emitter-state generated-code))
+(defgeneric verify-no-regression (regression-spec-type regression-spec source emitter-state generated-code))
 
 ;; -----------------------------------------------------------------------------
-(defmethod verify-no-regression ((regression-spec-type (eql :type)) regression-spec emitter-state generated-code)
+(defmethod verify-no-regression ((regression-spec-type (eql :type)) regression-spec source emitter-state generated-code)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defmethod verify-no-regression ((regression-spec-type (eql :function)) regression-spec emitter-state generated-code)
+(defmethod verify-no-regression ((regression-spec-type (eql :function)) regression-spec source emitter-state generated-code)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -1868,9 +1870,15 @@ to the previous line."
 	   (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
 	       (progn
 		 (print (format nil "--- ~a ---" pathname))
-		 (let ((code (flux-to-lisp pathname)))
+		 (let* ((source (make-source pathname))
+			(regression-specs (parse-spec-list (make-string-scanner (source-text source)) (make-instance 'parser-state)))
+			(emitter-state (make-instance 'emitter-state))
+			ast
+			code)
+		   (parse source)
+		   (setf code (emit (source-ast source) emitter-state))
 		   (pprint code)
-		   ;;////TODO: probably want something more elaborate than just evaluating the generated code
+		   (mapc (lambda (spec) (verify-no-regression (regression-spec-type spec) spec source emitter-state code)) regression-specs)
 		   (mapc #'eval code))))))
     (walk-directory *regression-suite-directory* #'test-file :directories nil))
   (in-package :flux))
@@ -1897,8 +1905,10 @@ to the previous line."
 			       :line-break-table (source-line-breaks code)
 			       :diagnostics (source-diagnostics code)))
 	 (scanner (make-string-scanner (source-text code)))
-	 (result (parse-compilation-unit scanner state)))
-    (list (parse-result-value result))))
+	 (result (parse-compilation-unit scanner state))
+	 (ast (parse-result-value result)))
+    (setf (source-ast code) ast)
+    (list ast)))
 
 (deftest test-parse-code-source ()
   (let ((source (make-source "type Foobar;")))
@@ -1920,6 +1930,11 @@ to the previous line."
   (if (directory-pathname-p code)
       (not-implemented "Compiling entire directories")
       (parse (make-source code))))
+
+;; -----------------------------------------------------------------------------
+(defun translate (source &key package-name)
+  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name "flux-program"))))
+    (emit (source-ast source) emitter-state)))
 
 ;; -----------------------------------------------------------------------------
 (defun flux-to-lisp (code &key package-name)
