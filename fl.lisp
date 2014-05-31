@@ -120,10 +120,11 @@
 
 ;; -----------------------------------------------------------------------------
 (defmacro defsuite (name parameters &body body)
-  `(deftest-internal ,name ,parameters
-     (combine-results
-       ,@body))
-  `(setf *test-suites* (cons #',name *test-suites*)))
+  `(progn
+     (deftest-internal ,name ,parameters
+       (combine-results
+	 ,@body))
+     (setf *test-suites* (cons #',name *test-suites*))))
 
 ;; -----------------------------------------------------------------------------
 ;////TODO: print test summary at end
@@ -282,6 +283,13 @@
   (let ((vector (make-array 10 :adjustable t :fill-pointer 0)))
     (insert-into-array vector 10 0)
     (test (equal (length vector) 1))))
+
+;; -----------------------------------------------------------------------------
+(defun whitespace-char-p (char)
+  (or (equal char #\Return)
+      (equal char #\Tab)
+      (equal char #\Newline)
+      (equal char #\Space)))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-utilities ()
@@ -936,7 +944,20 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun scanner-match-sequence (scanner token-list)
-  (every (lambda (token) (scanner-match scanner token)) token-list))
+  (let ((saved-position (scanner-position scanner)))
+    (if (every (lambda (token) (scanner-match scanner token)) token-list)
+	t
+	(progn
+	  (setf (scanner-position scanner) saved-position)
+	  nil))))
+
+(deftest test-scanner-match-sequence ()
+  (let ((scanner (make-string-scanner "foo")))
+    (test (not (scanner-match-sequence scanner "bar")))
+    (test-equal 0 (scanner-position scanner)))
+  (let ((scanner (make-string-scanner "foobar")))
+    (test (scanner-match-sequence scanner "foo"))
+    (test-equal 3 (scanner-position scanner))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod (setf scanner-position) :before (position (scanner string-scanner))
@@ -954,6 +975,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defsuite test-scanners ()
   (test-scanner-match)
+  (test-scanner-match-sequence)
   (test-stream-scanner-at-end-p)
   (test-stream-scanner-peek-next)
   (test-string-scanner-at-end-p)
@@ -1427,6 +1449,7 @@ to the previous line."
     ;; Parse modifiers.
     (setf modifiers (parse-modifier-list scanner state))
 
+    ;;////FIXME: this needs to match keyword+whitespace, not just keyword
     ;; Parse definition kind.
     (parse-whitespace scanner state)
     (setf definition-class (cond ((scanner-match-sequence scanner "method")
@@ -1557,7 +1580,9 @@ to the previous line."
    (package-name
     :reader emitter-package-name
     :initarg :package-name
-    :initform "flux-program")))
+    :initform "flux-program")
+   functions
+   types))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *object-class-name* (intern "Object"))
@@ -1694,6 +1719,148 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
+(defclass regression-spec ()
+  ((type
+    :reader regression-type
+    :initarg :type)
+   (data
+    :reader regression-data
+    :initarg :data)))
+
+;; -----------------------------------------------------------------------------
+(defgeneric verify-no-regression (regression-spec-type regression-spec emitter-state generated-code))
+
+;; -----------------------------------------------------------------------------
+(defmethod verify-no-regression ((regression-spec-type (eql :type)) regression-spec emitter-state generated-code)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defmethod verify-no-regression ((regression-spec-type (eql :function)) regression-spec emitter-state generated-code)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defun parse-spec-ignored-text (scanner state)
+  (let ((saved-position (scanner-position scanner))
+	char)
+    (loop
+       (if (or (scanner-at-end-p scanner)
+	       (scanner-match-sequence scanner "/*#"))
+	   (return))
+       (let ((char (scanner-read-next scanner)))
+	 (if (or (equal char #\Return)
+		 (equal char #\Newline))
+	     (progn
+	       (if (equal char #\Return)
+		   (scanner-match scanner #\Newline))
+	       (add-line-break (line-break-table state) (scanner-position scanner))))))
+    (if (equal (scanner-position scanner)
+	       saved-position)
+	(parse-result-no-match)
+	(parse-result-match))))
+
+(deftest test-parse-spec-ignored-text ()
+  (test-parser parse-spec-ignored-text (format nil "fooi /* fo~Co */ ;[] /*#FOO" #\Newline) :is-match-p t :end-position 23 :line-breaks-at '(0 11)))
+
+;; -----------------------------------------------------------------------------
+(defun parse-spec-key (scanner state)
+  (let ((string (make-array 10 :adjustable t :fill-pointer 0 :element-type 'character)))
+    (loop
+       (if (or (scanner-at-end-p scanner)
+	       (not (alpha-char-p (scanner-peek-next scanner))))
+	   (return))
+       (vector-push-extend (scanner-read-next scanner) string))
+    (if (zerop (length string))
+	(parse-result-no-match)
+	(parse-result-match (intern (string-upcase string) :keyword)))))
+
+(deftest test-parse-spec-key ()
+  (test-parser parse-spec-key "foo" :is-match-p t :end-position 3 :expected-type 'symbol
+	       :checks ((test-equal :foo ast))))
+
+;; -----------------------------------------------------------------------------
+(defun parse-spec-value (scanner state)
+  (let ((string (make-array 10 :adjustable t :fill-pointer 0 :element-type 'character)))
+    (loop
+       (if (or (scanner-at-end-p scanner)
+	       (whitespace-char-p (scanner-peek-next scanner)))
+	   (return))
+       (vector-push-extend (scanner-read-next scanner) string))
+    (if (zerop (length string))
+	(parse-result-no-match)
+	(parse-result-match string))))
+
+(deftest test-parse-spec-value ()
+  (test-parser parse-spec-value "10" :is-match-p t :end-position 2 :expected-type 'string))
+
+;; -----------------------------------------------------------------------------
+(defun parse-spec-key-value-pair (scanner state)
+  (let (key value)
+    (setf key (parse-spec-key scanner state))
+    (if (not (parse-result-match-p key))
+	(return-from parse-spec-key-value-pair (parse-result-no-match)))
+    (if (scanner-match scanner #\=)
+	(progn
+	  (setf value (parse-spec-value scanner state))
+	  (if (not (parse-result-match-p value))
+	      (not-implemented "expecting value"))))
+    (parse-result-match (cons (parse-result-value key)
+			      (parse-result-value value)))))
+
+(deftest test-parse-spec-key-value-pair ()
+  (test-parser parse-spec-key-value-pair "foo=bar" :is-match-p t :end-position 7
+	       :checks ((test (listp ast))
+			(test-equal :foo (car ast))
+			(test-equal "bar" (cdr ast)))))
+
+;; -----------------------------------------------------------------------------
+(defun parse-spec-key-value-pair-list (scanner state)
+  (parse-list parse-spec-key-value-pair scanner state))
+
+(deftest test-parse-spec-key-value-pair-list ()
+  (test-parser parse-spec-key-value-pair-list "foo=1 bar=2" :is-match-p t :end-position 11))
+
+;; -----------------------------------------------------------------------------
+(defun parse-spec-list (scanner state)
+  (let (list spec spec-type values)
+    (loop
+       (parse-spec-ignored-text scanner state)
+       (if (scanner-at-end-p scanner)
+	   (return))
+
+       (setf spec-type (cond ((scanner-match-sequence scanner "TYPE:") :type)
+			     ((scanner-match-sequence scanner "FUNCTION:") :function)
+			     (t (not-implemented "Unrecognized regression spec type"))))
+
+       (setf values (parse-spec-key-value-pair-list scanner state))
+       (if (not (parse-result-match values))
+	   (not-implemented "parse error; expecting list of key/value pairs"))
+
+       (setf spec (make-instance 'regression-spec
+				 :type spec-type
+				 :data (parse-result-value values)))
+
+       (setf list (cons spec list))
+       (setf spec nil)
+
+       (parse-whitespace scanner state)
+       (if (not (scanner-match-sequence scanner "*/"))
+	   (not-implemented "Unterminated regression spec")))
+    (if (not list)
+	(parse-result-no-match)
+	(parse-result-match list))))
+
+(deftest test-parse-spec-list ()
+  (test-parser parse-spec-list "/*#TYPE: Foobar */" :is-match-p t :expected-type 'list
+	       :checks ((test-type 'regression-spec (car ast)))))
+
+;; -----------------------------------------------------------------------------
+(defsuite test-spec-parsers ()
+  (test-parse-spec-ignored-text)
+  (test-parse-spec-key)
+  (test-parse-spec-value)
+  (test-parse-spec-key-value-pair)
+  (test-parse-spec-key-value-pair-list)
+  (test-parse-spec-list))
 
 ;; -----------------------------------------------------------------------------
 (defun run-regression-tests ()
