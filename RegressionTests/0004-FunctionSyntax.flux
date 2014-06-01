@@ -1,0 +1,7 @@
+
+module Test
+{
+	function Foobar : () -> ()
+	{
+	}
+}
