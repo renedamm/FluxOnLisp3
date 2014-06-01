@@ -729,7 +729,12 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-combination-type (ast-type)
-  ())
+  ((left-type
+    :reader ast-type-left
+    :initarg :left-type)
+   (right-type
+    :reader ast-type-right
+    :initarg :right-type)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-function-type (ast-combination-type)
@@ -1166,7 +1171,9 @@ to the previous line."
 	   ;; Check end position, if requested.
 	   (if ,end-position-value
 	       (test-equal ,end-position-value (scanner-position ,scanner))
-	       t)
+	       (if ,(and is-match-p (not (eq is-match-p :dont-test)))
+		   (test-equal (length ,string) (scanner-position ,scanner))
+		   t))
 
 	   ;; Check value type, if requested.
 	   (if ,expected-type-value
@@ -1517,35 +1524,64 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type (scanner state)
-  (let ((saved-position (scanner-position scanner))
-	modifiers
-	name)
-    (cond ((scanner-match scanner #\()
-	   (parse-whitespace scanner state)
-	   (if (scanner-match scanner #\))
-	       (parse-result-match (make-instance 'ast-nothing-type
-						  :source-region (make-source-region saved-position (scanner-position scanner))))
-	       (not-implemented "parenthesized type expressions")))
-	  (t
-	   (setf modifiers (parse-modifier-list scanner state))
-	   (parse-whitespace scanner state)
-	   (setf name (parse-identifier scanner state))
-	   (if (parse-result-no-match-p name)
-	       (not-implemented "parse error; expecting type name"))
-	   (parse-result-match (make-instance 'ast-named-type
-					      :source-region (make-source-region saved-position (scanner-position scanner))
-					      :name (parse-result-value name)
-					      :modifiers (parse-result-value modifiers)))))))
+  (let* ((saved-position (scanner-position scanner))
+	 (left-type (cond ((scanner-match scanner #\()
+			   (parse-whitespace scanner state)
+			   (if (scanner-match scanner #\))
+			       (parse-result-match (make-instance 'ast-nothing-type
+								  :source-region (make-source-region saved-position (scanner-position scanner))))
+			       (not-implemented "parenthesized type expressions")))
+			  (t
+			   (let (modifiers name)
+			     (setf modifiers (parse-modifier-list scanner state))
+			     (parse-whitespace scanner state)
+			     (setf name (parse-identifier scanner state))
+			     (if (parse-result-no-match-p name)
+				 (not-implemented "parse error; expecting type name"))
+			     (parse-result-match (make-instance 'ast-named-type
+								:source-region (make-source-region saved-position (scanner-position scanner))
+								:name (parse-result-value name)
+								:modifiers (parse-result-value modifiers))))))))
+    (parse-whitespace scanner state)
+
+    (let ((combination-type (cond ((scanner-match-sequence scanner "->")
+				   'ast-function-type)
+				  ((scanner-match scanner #\&)
+				   'ast-union-type)
+				  ((scanner-match scanner #\|)
+				   'ast-intersection-type)
+				  (t nil))))
+      (if (not combination-type)
+	  (return-from parse-type left-type))
+
+      (parse-whitespace scanner state)
+      (let ((right-type (parse-type scanner state)))
+	(if (parse-result-no-match-p right-type)
+	    (not-implemented "parse error; expecting right type"))
+	(parse-result-match (make-instance combination-type
+					   :source-region (make-source-region saved-position (scanner-position scanner))
+					   :left-type (parse-result-value left-type)
+					   :right-type (parse-result-value right-type)))))))
 
 (deftest test-parse-simple-named-type ()
-  (test-parser parse-type "Foobar" :is-match-p t :end-position 6 :expected-type 'ast-named-type))
+  (test-parser parse-type "Foobar" :is-match-p t :expected-type 'ast-named-type))
 
 (deftest test-parse-nothing-type ()
-  (test-parser parse-type "()" :is-match-p t :end-position 2 :expected-type 'ast-nothing-type))
+  (test-parser parse-type "()" :is-match-p t :expected-type 'ast-nothing-type))
+
+(deftest test-parse-simple-function-type ()
+  (test-parser parse-type "() -> ()" :is-match-p t :expected-type 'ast-function-type))
+
+(deftest test-parse-simple-union-type ()
+  (test-parser parse-type "Foobar & Foobar" :is-match-p t :expected-type 'ast-union-type
+	       :checks ((test-type 'ast-named-type (ast-type-left ast))
+			(test-type 'ast-named-type (ast-type-right ast)))))
 
 (deftest test-parse-type ()
   (test-parse-simple-named-type)
-  (test-parse-nothing-type))
+  (test-parse-nothing-type)
+  (test-parse-simple-function-type)
+  (test-parse-simple-union-type))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter (scanner state)
