@@ -1,5 +1,5 @@
 
 module Test
 {
-	abstract type Foobar;
+	abstract type Object;
 }

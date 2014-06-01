@@ -649,11 +649,53 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-instantiable-modifier (ast-modifier)
+(defclass ast-extend-modifier (ast-modifier)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-read-modifier (ast-modifier)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-write-modifier (ast-modifier)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-default-modifier (ast-modifier)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-final-modifier (ast-modifier)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-sealed-modifier (ast-modifier)
   ())
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-clause (ast-node)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-contract-clause (ast-clause)
+  (expression
+   :reader ast-contract-expression
+   :initarg :expression))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-requires-clause (ast-contract-clause)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-ensures-clause (ast-contract-clause)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-invariant-clause (ast-contract-clause)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-when-clause (ast-clause)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -662,6 +704,35 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-expression (ast-node)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-type (ast-node)
+  ((modifiers
+    :reader ast-type-modifiers
+    :initarg :modifiers)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-named-type (ast-type)
+  ((name
+    :reader ast-type-name
+    :initarg :name)
+   type-arguments))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-combination-type (ast-type)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-function-type (ast-combination-type)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-union-type (ast-combination-type)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-intersection-type (ast-combination-type)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -712,6 +783,10 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-method-definition (ast-function-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-variable-definition (ast-definition)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -1087,7 +1162,7 @@ to the previous line."
 
 	   ;; Check value type, if requested.
 	   (if ,expected-type-value
-	       (test-type ,expected-type-value (parse-result-value ,res))
+	       (test-type ,expected-type-value (if (parse-result-match-p ,res) (parse-result-value ,res) ,res))
 	       t)
 	
 	   ;; Check line breaks, if requested.
@@ -1363,6 +1438,8 @@ to the previous line."
       (match "abstract" 'ast-abstract-modifier)
       (match "immutable" 'ast-immutable-modifier)
       (match "mutable" 'ast-mutable-modifier)
+      (match "instantiable" 'ast-instantiable-modifier)
+      (match "extend" 'ast-extend-modifier)
       (match "import" 'ast-import-modifier)
       (match "include" 'ast-include-modifier)
       (parse-result-no-match))))
@@ -1373,7 +1450,9 @@ to the previous line."
   (test-parser parse-modifier "immutable " :end-position 9 :is-match-p t :expected-type 'ast-immutable-modifier)
   (test-parser parse-modifier "mutable" :end-position 7 :is-match-p t :expected-type 'ast-mutable-modifier)
   (test-parser parse-modifier "import?" :end-position 6 :is-match-p t :expected-type 'ast-import-modifier)
-  (test-parser parse-modifier "include%" :end-position 7 :is-match-p t :expected-type 'ast-include-modifier))
+  (test-parser parse-modifier "include%" :end-position 7 :is-match-p t :expected-type 'ast-include-modifier)
+  (test-parser parse-modifier "extend+" :end-position 6 :is-match-p t :expected-type 'ast-extend-modifier)
+  (test-parser parse-modifier "instantiable!" :end-position 12 :is-match-p t :expected-type 'ast-instantiable-modifier))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier-list (scanner state)
@@ -1430,7 +1509,26 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type (scanner state)
-  (parse-result-no-match))
+  (let ((saved-position (scanner-position scanner))
+	modifiers
+	name)
+    (if (scanner-match scanner #\()
+	(not-implemented "parenthesized type expressions"))
+    (setf modifiers (parse-modifier-list scanner state))
+    (parse-whitespace scanner state)
+    (setf name (parse-identifier scanner state))
+    (if (parse-result-no-match-p name)
+	(not-implemented "parse error; expecting type name"))
+    (parse-result-match (make-instance 'ast-named-type
+				       :source-region (make-source-region saved-position (scanner-position scanner))
+				       :name (parse-result-value name)
+				       :modifiers (parse-result-value modifiers)))))
+
+(deftest test-parse-simple-named-type ()
+  (test-parser parse-type "Foobar" :is-match-p t :end-position 6 :expected-type 'ast-named-type))
+
+(deftest test-parse-type ()
+  (test-parse-simple-named-type))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter (scanner state)
@@ -1498,6 +1596,8 @@ to the previous line."
 				 'ast-type-definition)
 				((scanner-match-keyword scanner "object")
 				 'ast-object-definition)
+				((scanner-match-keyword scanner "local")
+				 'ast-variable-definition)
 				((scanner-match-keyword scanner "function")
 				 'ast-function-definition)
 				((scanner-match-keyword scanner "features")
@@ -1531,6 +1631,7 @@ to the previous line."
     (parse-whitespace scanner state)
     (cond ((scanner-match scanner #\;)
 	   t)
+	  ;;////TODO: if it's a type definition, we need to parse a type here when hitting '='
 	  ((scanner-match scanner #\=)
 	   (parse-whitespace scanner state)
 	   (setf value (parse-expression scanner state))
@@ -1607,6 +1708,7 @@ to the previous line."
   (test-parse-list)
   (test-parse-modifier)
   (test-parse-identifier)
+  (test-parse-type)
   (test-parse-definition)
   (test-parse-compilation-unit-simple))
 
@@ -1616,7 +1718,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass emitter-state ()
-  ((head
+  ((head
     :reader emitter-result
     :initform nil)
    (tail
