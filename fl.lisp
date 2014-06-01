@@ -713,6 +713,14 @@ to the previous line."
     :initarg :modifiers)))
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-special-type (ast-type)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-nothing-type (ast-special-type)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ast-named-type (ast-type)
   ((name
     :reader ast-type-name
@@ -1512,23 +1520,32 @@ to the previous line."
   (let ((saved-position (scanner-position scanner))
 	modifiers
 	name)
-    (if (scanner-match scanner #\()
-	(not-implemented "parenthesized type expressions"))
-    (setf modifiers (parse-modifier-list scanner state))
-    (parse-whitespace scanner state)
-    (setf name (parse-identifier scanner state))
-    (if (parse-result-no-match-p name)
-	(not-implemented "parse error; expecting type name"))
-    (parse-result-match (make-instance 'ast-named-type
-				       :source-region (make-source-region saved-position (scanner-position scanner))
-				       :name (parse-result-value name)
-				       :modifiers (parse-result-value modifiers)))))
+    (cond ((scanner-match scanner #\()
+	   (parse-whitespace scanner state)
+	   (if (scanner-match scanner #\))
+	       (parse-result-match (make-instance 'ast-nothing-type
+						  :source-region (make-source-region saved-position (scanner-position scanner))))
+	       (not-implemented "parenthesized type expressions")))
+	  (t
+	   (setf modifiers (parse-modifier-list scanner state))
+	   (parse-whitespace scanner state)
+	   (setf name (parse-identifier scanner state))
+	   (if (parse-result-no-match-p name)
+	       (not-implemented "parse error; expecting type name"))
+	   (parse-result-match (make-instance 'ast-named-type
+					      :source-region (make-source-region saved-position (scanner-position scanner))
+					      :name (parse-result-value name)
+					      :modifiers (parse-result-value modifiers)))))))
 
 (deftest test-parse-simple-named-type ()
   (test-parser parse-type "Foobar" :is-match-p t :end-position 6 :expected-type 'ast-named-type))
 
+(deftest test-parse-nothing-type ()
+  (test-parser parse-type "()" :is-match-p t :end-position 2 :expected-type 'ast-nothing-type))
+
 (deftest test-parse-type ()
-  (test-parse-simple-named-type))
+  (test-parse-simple-named-type)
+  (test-parse-nothing-type))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter (scanner state)
@@ -1677,14 +1694,16 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-compilation-unit (scanner state)
-  (let ((start-position (scanner-position scanner))
-	(definitions (parse-list parse-definition scanner state)))
-    ;////TODO: make sure we have consumed all input
-    (parse-result-match (make-instance 'ast-compilation-unit
-				       :source-region (make-source-region start-position (scanner-position scanner))
-				       :definitions (if (parse-result-no-match-p definitions)
-							(make-instance 'ast-list :source-region (make-source-region start-position start-position))
-							(parse-result-value definitions))))))
+  (let* ((start-position (scanner-position scanner))
+	 (definitions (parse-list parse-definition scanner state))
+	 (result (parse-result-match (make-instance 'ast-compilation-unit
+						    :source-region (make-source-region start-position (scanner-position scanner))
+						    :definitions (if (parse-result-no-match-p definitions)
+								     (make-instance 'ast-list :source-region (make-source-region start-position start-position))
+								     (parse-result-value definitions))))))
+    (if (not (scanner-at-end-p scanner))
+	(not-implemented "parse error; unrecognized input"))
+    result))
 
 (deftest test-parse-compilation-unit-empty ()
   (test-parser parse-compilation-unit "" :is-match-p t :expected-type 'ast-compilation-unit
@@ -1698,9 +1717,13 @@ to the previous line."
 	       ((test-type 'ast-list (ast-unit-definitions ast))
 		(test-equal 2 (length (ast-list-nodes (ast-unit-definitions ast)))))))
 
+(deftest test-parse-compilation-unit-consumes-all-input ()
+  (test-parser parse-compilation-unit "type Foobar; fdklajskfl$#@%@@#% FDSF" :is-match-p nil))
+
 (deftest test-parse-compilation-unit ()
   (test-parse-compilation-unit-empty)
-  (test-parse-compilation-unit-simple))
+  (test-parse-compilation-unit-simple)
+  (test-parse-compilation-unit-consumes-all-input))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
@@ -1776,6 +1799,10 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defgeneric emit (ast state))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-nothing-type) state)
+  (intern "Nothing"))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-named-type) state)
