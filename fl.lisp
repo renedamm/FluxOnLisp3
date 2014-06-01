@@ -1718,7 +1718,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass emitter-state ()
-  ((head
+  ((head
     :reader emitter-result
     :initform nil)
    (tail
@@ -1767,12 +1767,29 @@ to the previous line."
 			   (make-instance 'parser-state)))
 	    (,state (make-instance 'emitter-state))
 	    (,result (emit ,ast ,state)))
-       (destructuring-bind ,lambda-list
-	   ,result
-	 ,@checks))))
+       ,(if (not (listp lambda-list))
+	    `(let ((,lambda-list ,result))
+	       ,@checks)
+	    `(destructuring-bind ,lambda-list
+		 ,result
+	       ,@checks)))))
 
 ;; -----------------------------------------------------------------------------
 (defgeneric emit (ast state))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-named-type) state)
+  (identifier-to-lisp (ast-type-name ast)))
+
+(deftest test-emit-named-type-simple ()
+  (test-emitter
+      "Foobar"
+      #'parse-type
+      name
+    (test-equal "Foobar" (symbol-name name))))
+
+(defsuite test-emit-named-type ()
+  (test-emit-named-type-simple))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition) state)
@@ -1781,7 +1798,7 @@ to the previous line."
 			   (if (not (eq name *object-class-name*))
 			       (list *object-class-name*)
 			       ())
-			   (not-implemented "supertypes")))
+			   (list (emit (ast-definition-type ast) state))))
 	 (class `(defclass ,name ,superclasses ())))
     (append-forms state (list class))
     (if (definition-abstract-p ast)
@@ -1800,8 +1817,16 @@ to the previous line."
     (test-equal "Foobar" (symbol-name name))
     (test-equal *object-class-name* superclass)))
 
+(deftest test-emit-type-definition-single-supertype ()
+  (test-emitter
+      "type Foobar : Barfoo;"
+      #'parse-definition
+      (operator name (superclass) slots)
+    (test-equal "Barfoo" (symbol-name superclass))))
+
 (defsuite test-emit-type-definition ()
-  (test-emit-type-definition-simple))
+  (test-emit-type-definition-simple)
+  (test-emit-type-definition-single-supertype))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-function-definition) state)

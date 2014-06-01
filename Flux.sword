@@ -76,8 +76,6 @@ type -> modifier* identifier type_arguments?
       | type "&" type
       | type "|" type
 
-(A -> B) -> C
-
 identifier -> ( "::" )? {name:::"::"}
 
 name -> '[[:APHABETIC]_][[:APHANUMERIC:]_]*(!)?'
