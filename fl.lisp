@@ -697,31 +697,6 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-literal (ast-node)
-  ((value
-    :reader ast-literal-value
-    :initarg :value)))
-
-;; -----------------------------------------------------------------------------
-(defclass ast-character-literal (ast-literal)
-  ())
-
-;; -----------------------------------------------------------------------------
-(defclass ast-string-literal (ast-literal)
-  ())
-
-;; -----------------------------------------------------------------------------
-(defclass ast-integer-literal (ast-literal)
-  ((type
-    :reader ast-integer-type
-    :initarg :type
-    :initform 'integer)))
-
-;; -----------------------------------------------------------------------------
-(defclass ast-float-literal (ast-literal)
-  ())
-
-;; -----------------------------------------------------------------------------
 (defclass ast-clause (ast-node)
   (expression
    :reader ast-contract-expression
@@ -759,6 +734,31 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-expression (ast-node)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-literal-expression (ast-expression)
+  ((value
+    :reader ast-literal-value
+    :initarg :value)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-character-literal (ast-literal-expression)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-string-literal (ast-literal-expression)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-integer-literal (ast-literal-expression)
+  ((type
+    :reader ast-integer-type
+    :initarg :type
+    :initform 'integer)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-float-literal (ast-literal-expression)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -1490,40 +1490,6 @@ to the previous line."
       (test-parser parse-comma-separated-as "a, a, a]" :is-match-p t :expected-type 'ast-list :end-position 7))))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-literal (scanner state)
-  (if (scanner-at-end-p scanner)
-      (parse-result-no-match)
-      (let ((saved-position (scanner-position scanner))
-	    (next-char (scanner-read-next scanner)))
-	(cond ((digit-char-p next-char)
-	       (if (and (char-equal #\0 next-char)
-			(scanner-match scanner #\x))
-		   (not-implemented "hex literals"))
-	       (let ((multiplier 10)
-		     (value (digit-char-to-integer next-char)))
-		 (loop
-		    (if (scanner-at-end-p scanner)
-			(return))
-		    (setf next-char (scanner-peek-next scanner))
-		    (if (not (digit-char-p next-char))
-			(return))
-		    (scanner-read-next scanner)
-		    (incf value (* (digit-char-to-integer next-char) multiplier))
-		    (setf multiplier (* multiplier 10)))
-		 (parse-result-match (make-instance 'ast-integer-literal
-						    :source-region (make-source-region saved-position (scanner-position scanner))
-						    :value value))))
-	      (t (not-implemented "literal"))))))
-
-(deftest test-parse-integer-literal ()
-  (test-parser parse-literal "12" :is-match-p t :expected-type 'ast-integer-literal
-	       :checks ((test-equal 12 (ast-literal-value ast)))))
-
-(deftest test-parse-literal ()
-  (test-parser parse-literal "" :is-match-p nil)
-  (test-parse-integer-literal))
-
-;; -----------------------------------------------------------------------------
 (defun parse-modifier (scanner state)
   (let ((saved-position (scanner-position scanner)))
     (macrolet ((match (modifier ast-type)
@@ -1714,7 +1680,9 @@ to the previous line."
 		 (progn
 		   (setf expression (parse-expression scanner state))
 		   (if (parse-result-no-match-p expression)
-		       (not-implemented "parse error; expecting expression after 'return'"))))
+		       (not-implemented "parse error; expecting expression after 'return'"))
+		   (if (not (scanner-match scanner #\;))
+		       (not-implemented "parse error; expecting ';'"))))
 	     (parse-result-match (make-instance 'ast-return-statement
 						:source-region (make-source-region saved-position (scanner-position scanner))
 						:expression (parse-result-value expression)))))
@@ -1733,8 +1701,56 @@ to the previous line."
   (parse-list parse-statement scanner state :start-delimiter #\{ :end-delimiter #\}))
 
 ;; -----------------------------------------------------------------------------
+(defun parse-literal (scanner state)
+  (if (scanner-at-end-p scanner)
+      (parse-result-no-match)
+      (let ((saved-position (scanner-position scanner))
+	    (next-char (scanner-read-next scanner)))
+	(cond ((digit-char-p next-char)
+	       (if (and (char-equal #\0 next-char)
+			(scanner-match scanner #\x))
+		   (not-implemented "hex literals"))
+	       (let ((multiplier 10)
+		     (value (digit-char-to-integer next-char)))
+		 (loop
+		    (if (scanner-at-end-p scanner)
+			(return))
+		    (setf next-char (scanner-peek-next scanner))
+		    (if (not (digit-char-p next-char))
+			(return))
+		    (scanner-read-next scanner)
+		    (setf value (+ (digit-char-to-integer next-char) (* value multiplier)))
+		    (setf multiplier (* multiplier 10)))
+		 (parse-result-match (make-instance 'ast-integer-literal
+						    :source-region (make-source-region saved-position (scanner-position scanner))
+						    :value value))))
+	      (t (not-implemented "literal"))))))
+
+(deftest test-parse-integer-literal ()
+  (test-parser parse-literal "12" :is-match-p t :expected-type 'ast-integer-literal
+	       :checks ((test-equal 12 (ast-literal-value ast)))))
+
+(deftest test-parse-literal ()
+  (test-parser parse-literal "" :is-match-p nil)
+  (test-parse-integer-literal))
+
+;; -----------------------------------------------------------------------------
 (defun parse-expression (scanner state)
-  (parse-result-no-match))
+  (if (scanner-at-end-p scanner)
+      (parse-result-no-match)
+      (let ((next-char (scanner-peek-next scanner)))
+	(cond ((or (digit-char-p next-char)
+		   (char-equal #\" next-char))
+	       (parse-literal scanner state))
+	      (t
+	       (parse-result-no-match))))))
+
+(deftest test-parse-literal-expression ()
+  (test-parser parse-expression "512" :is-match-p t :expected-type 'ast-integer-literal
+	       :checks ((test-equal 512 (ast-literal-value ast)))))
+
+(deftest test-parse-expression ()
+  (test-parse-literal-expression))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-definition (scanner state)
@@ -1891,6 +1907,7 @@ to the previous line."
   (test-parse-identifier)
   (test-parse-literal)
   (test-parse-type)
+  (test-parse-expression)
   (test-parse-statement)
   (test-parse-definition)
   (test-parse-compilation-unit-simple))
