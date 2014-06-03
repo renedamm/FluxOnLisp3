@@ -292,6 +292,26 @@
       (equal char #\Space)))
 
 ;; -----------------------------------------------------------------------------
+(defun digit-char-to-integer (char)
+  (cond ((and (char>= char #\0)
+	      (char<= char #\9))
+	 (- (char-code char) (char-code #\0)))
+	((and (char>= char #\a)
+	      (char<= char #\f))
+	 (- (char-code char) (char-code #\a)))
+	((and (char>= char #\A)
+	      (char<= char #\F))
+	 (- (char-code char) (char-code #\A)))
+	(t (error (format "Character ~@C is not a valid digit character" char)))))
+
+(deftest test-digit-char-to-integer ()
+  (test-equal 0 (digit-char-to-integer #\0))
+  (test-equal 9 (digit-char-to-integer #\9))
+  (test-equal 10 (digit-char-to-integer #\A))
+  (test-equal 11 (digit-char-to-integer #\b))
+  (test-equal 15 (digit-char-to-integer #\f)))
+
+;; -----------------------------------------------------------------------------
 (defsuite test-utilities ()
   (test-insert-into-array))
 
@@ -673,14 +693,43 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-clause (ast-node)
+(defclass ast-instantiable-modifier (ast-modifier)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-contract-clause (ast-clause)
+(defclass ast-literal (ast-node)
+  ((value
+    :reader ast-literal-value
+    :initarg :value)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-character-literal (ast-literal)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-string-literal (ast-literal)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-integer-literal (ast-literal)
+  ((type
+    :reader ast-integer-type
+    :initarg :type
+    :initform 'integer)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-float-literal (ast-literal)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-clause (ast-node)
   (expression
    :reader ast-contract-expression
    :initarg :expression))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-contract-clause (ast-clause)
+  ())
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-requires-clause (ast-contract-clause)
@@ -701,6 +750,12 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass ast-statement (ast-node)
   ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-return-statement (ast-node)
+  ((expression
+    :reader ast-return-expression
+    :initarg :expression)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-expression (ast-node)
@@ -1058,7 +1113,9 @@ to the previous line."
   (let ((saved-position (scanner-position scanner)))
     (if (and (scanner-match-sequence scanner token-list)
 	     (or (scanner-at-end-p scanner)
-		 (not (alphanumericp (scanner-peek-next scanner)))))
+		 (let ((next-char (scanner-peek-next scanner)))
+		   (and (not (alphanumericp next-char))
+			(not (equal next-char #\_))))))
 	t
 	(progn
 	  (setf (scanner-position scanner) saved-position)
@@ -1073,7 +1130,9 @@ to the previous line."
     (test-equal 6 (scanner-position scanner)))
   (let ((scanner (make-string-scanner "foo")))
     (test (scanner-match-keyword scanner "foo"))
-    (test-equal 3 (scanner-position scanner))))
+    (test-equal 3 (scanner-position scanner)))
+  (let ((scanner (make-string-scanner "foo_")))
+    (test (not (scanner-match-keyword scanner "foo")))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod (setf scanner-position) :before (position (scanner string-scanner))
@@ -1431,16 +1490,38 @@ to the previous line."
       (test-parser parse-comma-separated-as "a, a, a]" :is-match-p t :expected-type 'ast-list :end-position 7))))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-string-literal ()
-  ())
+(defun parse-literal (scanner state)
+  (if (scanner-at-end-p scanner)
+      (parse-result-no-match)
+      (let ((saved-position (scanner-position scanner))
+	    (next-char (scanner-read-next scanner)))
+	(cond ((digit-char-p next-char)
+	       (if (and (char-equal #\0 next-char)
+			(scanner-match scanner #\x))
+		   (not-implemented "hex literals"))
+	       (let ((multiplier 10)
+		     (value (digit-char-to-integer next-char)))
+		 (loop
+		    (if (scanner-at-end-p scanner)
+			(return))
+		    (setf next-char (scanner-peek-next scanner))
+		    (if (not (digit-char-p next-char))
+			(return))
+		    (scanner-read-next scanner)
+		    (incf value (* (digit-char-to-integer next-char) multiplier))
+		    (setf multiplier (* multiplier 10)))
+		 (parse-result-match (make-instance 'ast-integer-literal
+						    :source-region (make-source-region saved-position (scanner-position scanner))
+						    :value value))))
+	      (t (not-implemented "literal"))))))
 
-;; -----------------------------------------------------------------------------
-(defun parse-numeric-literal ()
-  ())
+(deftest test-parse-integer-literal ()
+  (test-parser parse-literal "12" :is-match-p t :expected-type 'ast-integer-literal
+	       :checks ((test-equal 12 (ast-literal-value ast)))))
 
-;; -----------------------------------------------------------------------------
-(defun parse-literal ()
-  ())
+(deftest test-parse-literal ()
+  (test-parser parse-literal "" :is-match-p nil)
+  (test-parse-integer-literal))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier (scanner state)
@@ -1457,6 +1538,8 @@ to the previous line."
       (match "extend" 'ast-extend-modifier)
       (match "import" 'ast-import-modifier)
       (match "include" 'ast-include-modifier)
+      (match "final" 'ast-final-modifier)
+      (match "sealed" 'ast-sealed-modifier)
       (parse-result-no-match))))
 
 (deftest test-parse-modifier ()
@@ -1467,7 +1550,10 @@ to the previous line."
   (test-parser parse-modifier "import?" :end-position 6 :is-match-p t :expected-type 'ast-import-modifier)
   (test-parser parse-modifier "include%" :end-position 7 :is-match-p t :expected-type 'ast-include-modifier)
   (test-parser parse-modifier "extend+" :end-position 6 :is-match-p t :expected-type 'ast-extend-modifier)
-  (test-parser parse-modifier "instantiable!" :end-position 12 :is-match-p t :expected-type 'ast-instantiable-modifier))
+  (test-parser parse-modifier "instantiable!" :end-position 12 :is-match-p t :expected-type 'ast-instantiable-modifier)
+  (test-parser parse-modifier "final " :end-position 5 :is-match-p t :expected-type 'ast-final-modifier)
+  (test-parser parse-modifier "sealed_" :is-match-p nil)
+  (test-parser parse-modifier "sealed#" :end-position 6 :is-match-p t :expected-type 'ast-sealed-modifier))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier-list (scanner state)
@@ -1508,7 +1594,24 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause (scanner state)
-  (parse-result-no-match))
+  (let ((saved-position (scanner-position scanner))
+	(clause-type (cond ((scanner-match-keyword scanner "when")
+			    'ast-when-clause)
+			   ((scanner-match-keyword scanner "requires")
+			    'ast-requires-clause)
+			   ((scanner-match-keyword scanner "ensures")
+			    'ast-ensures-clause)
+			   ((scanner-match-keyword scanner "invariant")
+			    'ast-invariant-clause)
+			   (t
+			    (return-from parse-clause (parse-result-no-match))))))
+    (parse-whitespace scanner state)
+    (let ((expression (parse-expression scanner state)))
+      (if (parse-result-no-match-p expression)
+	  (not-implemented "parse error; expecting expression"))
+      (parse-result-match (make-instance clause-type
+					 :source (make-source-region saved-position (scanner-position scanner))
+					 :expression (parse-result-value expression))))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause-list (scanner state)
@@ -1603,7 +1706,26 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-statement (scanner state)
-  (parse-result-no-match))
+  (let ((saved-position (scanner-position scanner)))
+    (cond ((scanner-match-keyword scanner "return")
+	   (parse-whitespace scanner state)
+	   (let (expression)
+	     (if (not (scanner-match scanner #\;))
+		 (progn
+		   (setf expression (parse-expression scanner state))
+		   (if (parse-result-no-match-p expression)
+		       (not-implemented "parse error; expecting expression after 'return'"))))
+	     (parse-result-match (make-instance 'ast-return-statement
+						:source-region (make-source-region saved-position (scanner-position scanner))
+						:expression (parse-result-value expression)))))
+	  (t
+	   (parse-result-no-match)))))
+
+(deftest test-parse-return-statement ()
+  (test-parser parse-statement "return ;" :is-match-p t :expected-type 'ast-return-statement))
+
+(deftest test-parse-statement ()
+  (test-parse-return-statement))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-statement-list (scanner state)
@@ -1767,7 +1889,9 @@ to the previous line."
   (test-parse-list)
   (test-parse-modifier)
   (test-parse-identifier)
+  (test-parse-literal)
   (test-parse-type)
+  (test-parse-statement)
   (test-parse-definition)
   (test-parse-compilation-unit-simple))
 

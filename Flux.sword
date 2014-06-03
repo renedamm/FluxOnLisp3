@@ -39,7 +39,10 @@ expression -> "(" expression ")"
 	    | "object" ":" type ( "{" ... "}" )?
 	    | literal
 
-literal -> 
+literal -> integer_literal
+
+integer_literal -> '[0-9]+(b|B|l|L)'
+	 | '0x[0-9A-Fa-f]+(b|B|l|L)'
 
 binary_operator -> "&&"
 		 | "||"
@@ -59,19 +62,18 @@ unary_postfix_operator -> "++"
 
 type_parameters -> "<" {type_parameter:::","} ">"
 
-type_parameter -> type ( "=" type )?
-	        | modifier* identifier ":" type ( "=" type )?
+type_parameter -> ( modifier* identifier ":" )? type ( "=" type )?
 
 value_parameters -> "(" {value_parameter:::","} ")"
 
-value_parameter ->
+value_parameter -> ( modifier* identifier ":" )? type ( "=" expression )?
 
 type_arguments -> "<" {type:::","} ">"
 
 value_arguments -> "(" {expression:::","} ")"
 
 type -> modifier* identifier type_arguments?
-      | "(" {type:::","} ")" // May be a tuple type or just a parenthesized type expression.
+      | "(" {type_parameter:::","} ")" // May be a tuple type or just a parenthesized type expression.
       | type "->" type
       | type "&" type
       | type "|" type
