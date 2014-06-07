@@ -10,6 +10,7 @@ definition_keyword -> "type"
 		    | "field"
 		    | "module"
 		    | "features"
+		    | "namespace"
 		    | "local"
 
 definition_body -> ";"
@@ -29,6 +30,8 @@ statement -> ";"
 	   | "try" ( "(" expression ")" )? statement ( "finally" statement )?
 	   | definition
 	   | expression ";"
+
+////REVIEW: don't try to solve operator precedence at the syntactic level; this is semantics
 
 expression -> "(" expression ")"
 	    | identifier type_arguments value_arguments
@@ -99,6 +102,7 @@ modifier -> "abstract"
 	  | "read"
 	  | "write"
 	  | "private"
+	  | "using"
 
 clause -> "when" expression
         | "requires" expression
