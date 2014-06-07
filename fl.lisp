@@ -1915,13 +1915,23 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defclass emitter-state ()
+;; A block of emitted Lisp code.
+(defclass emitter-block ()
   ((head
-    :reader emitter-result
     :initform nil)
    (tail
-    :reader emitter-result-tail
     :initform nil)
+   (name
+    :initform nil)))
+
+;; -----------------------------------------------------------------------------
+(defclass emitter-state ()
+  ((blocks
+    :reader emitter-blocks
+    :initform (progn
+                (let ((array (make-array 10 :adjustable t :fill-pointer t :element-type 'emitter-block)))
+                  (vector-push-extend (make-instance 'emitter-block) array)
+                  array)))
    (package-name
     :reader emitter-package-name
     :initarg :package-name
@@ -1933,28 +1943,70 @@ to the previous line."
 (defparameter *object-class-name* (intern "Object"))
 
 ;; -----------------------------------------------------------------------------
-(defun append-forms (state list)
-  (let ((head (slot-value state 'head)))
+(defun current-emitter-block (state)
+  (let ((blocks (slot-value state 'blocks)))
+    (elt blocks (1- (length blocks)))))
+
+(deftest test-current-emitter-block ()
+  (test (current-emitter-block (make-instance 'emitter-state))))
+
+;; -----------------------------------------------------------------------------
+(defun current-emitter-block-head (state)
+  (slot-value (current-emitter-block state) 'head))
+  
+;; -----------------------------------------------------------------------------
+(defun current-emitter-block-tail (state)
+  (slot-value (current-emitter-block state) 'tail))
+  
+;; -----------------------------------------------------------------------------
+(defun set-current-block-name (state name)
+  (setf (slot-value (current-emitter-block state) 'name) name))
+
+;; -----------------------------------------------------------------------------
+(defun get-current-block-name (state)
+  (slot-value (current-emitter-block state) 'name))
+
+;; -----------------------------------------------------------------------------
+(defun get-emitted-code (state)
+  (current-emitter-block-head state))
+
+;; -----------------------------------------------------------------------------
+(defun push-emitter-block (state &key name)
+  (let ((block (make-instance 'emitter-block)))
+    (vector-push-extend block (slot-value state 'blocks))
+    (if name
+        (set-current-block-name state name))
+    block))
+
+;; -----------------------------------------------------------------------------
+(defun pop-emitter-block (state)
+  (vector-pop (slot-value state 'blocks)))
+
+;; -----------------------------------------------------------------------------
+(defun append-code-to-current-emitter-block (state list)
+  (let* ((block (current-emitter-block state))
+         (head (slot-value block 'head)))
     (if (not head)
         (progn
-          (setf (slot-value state 'head) list)
-          (setf (slot-value state 'tail) (last list)))
+          (setf (slot-value block 'head) list)
+          (setf (slot-value block 'tail) (last list)))
         (progn
-          (setf (cdr (slot-value state 'tail)) list)
-          (setf (slot-value state 'tail) (last list))))))
+          (setf (cdr (slot-value block 'tail)) list)
+          (setf (slot-value block 'tail) (last list)))))
+  list)
 
-(deftest test-append-forms ()
+(deftest test-append-code-to-current-emitter-block ()
   (let ((state (make-instance 'emitter-state))
         (list1 (list 1 2 3))
         (list2 (list 4 5 6)))
-    (append-forms state list1)
-    (test (eq (slot-value state 'head) list1))
-    (test (eq (slot-value state 'tail) (last list1)))
+    (append-code-to-current-emitter-block state list1)
+    (test (eq (current-emitter-block-head state) list1))
+    (test (eq (current-emitter-block-tail state) (last list1)))
 
-    (append-forms state list2)
-    (test (eq (slot-value state 'head) list1))
-    (test (eq (slot-value state 'tail) (last list2)))
-    (test-equal (list 1 2 3 4 5 6) (slot-value state 'head))))
+    (append-code-to-current-emitter-block state list2)
+    (test (eq (current-emitter-block-head state) list1))
+    (test (eq (current-emitter-block-tail state) (last list2)))
+    (test-equal (list 1 2 3 4 5 6) (current-emitter-block-head state))))
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-emitter (code parser lambda-list &body checks)
@@ -1994,6 +2046,29 @@ to the previous line."
   (test-emit-named-type-simple))
 
 ;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-integer-literal) state)
+  (ast-literal-value ast))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-return-statement) state)
+  (let* ((value-expression (ast-return-expression ast))
+         (value (if value-expression
+                  (emit value-expression state)
+                  nil))
+         (code `(return-from ,(get-current-block-name state) ,value)))
+    (append-code-to-current-emitter-block state code)))
+
+(deftest test-emit-return-statement-with-simple-value ()
+  (test-emitter
+    "return 0;"
+    #'parse-statement
+    (operator name value)
+    ()))
+
+(defsuite test-emit-return-statement ()
+  (test-emit-return-statement-with-simple-value))
+
+;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition) state)
   (let* ((name (identifier-to-lisp (ast-definition-name ast)))
          ;;////TODO: need to properly look up names
@@ -2003,10 +2078,11 @@ to the previous line."
                                ())
                            (list (emit (ast-definition-type ast) state))))
          (class `(defclass ,name ,superclasses ())))
-    (append-forms state (list class))
+    (append-code-to-current-emitter-block state (list class))
     (if (definition-abstract-p ast)
-        (let ((error-message (format nil "Cannot instantiate abstract class ~a!" (identifier-to-string (ast-definition-name ast)))))
-          (append-forms state
+        (let ((error-message (format nil "Cannot instantiate abstract class ~a!"
+                                     (identifier-to-string (ast-definition-name ast)))))
+          (append-code-to-current-emitter-block state
                         (list `(defmethod make-instance :before ((instance ,name) &key)
                                  (error ,error-message))))))
     class))
@@ -2033,11 +2109,16 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-function-definition) state)
-  (let* ((name (identifier-to-lisp (ast-definition-name ast)))
-         ;(body (emit (ast-definition-body ast) state))
-         (method `(defmethod ,name () ())))
-    (append-forms state (list method))
-    method))
+  (let ((name (identifier-to-lisp (ast-definition-name ast))))
+    (push-emitter-block state :name name)
+    (let* ((body-ast  (ast-definition-body ast))
+           (body (if body-ast
+                   (mapcan (lambda (statement) (emit statement state)) (ast-list-nodes body-ast))
+                   nil))
+           (method `(defmethod ,name () ,body)))
+    (pop-emitter-block state)
+    (append-code-to-current-emitter-block state (list method))
+    method)))
 
 (deftest test-emit-function-definition-simple ()
   (test-emitter
@@ -2066,7 +2147,7 @@ to the previous line."
 
   ;; Emit prologue.
   (let ((package-name (emitter-package-name state)))
-    (append-forms state
+    (append-code-to-current-emitter-block state
                   `((in-package :cl-user)
                     (defpackage ,package-name
                       (:use :common-lisp)
@@ -2077,7 +2158,7 @@ to the previous line."
   (mapc (lambda (definition) (emit definition state))
         (ast-list-nodes (ast-unit-definitions ast)))
 
-  (emitter-result state))
+  (get-emitted-code state))
 
 (deftest test-emit-compilation-unit-prologue ()
   (test-emitter
@@ -2091,7 +2172,8 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-emitters ()
-  (test-append-forms)
+  (test-current-emitter-block)
+  (test-append-code-to-current-emitter-block)
   (test-emit-type-definition)
   (test-emit-function-definition)
   (test-emit-compilation-unit))
@@ -2110,18 +2192,22 @@ to the previous line."
     :initarg :data)))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric verify-no-regression (regression-spec-type regression-spec source emitter-state generated-code))
+(defgeneric verify-no-regression (regression-spec-type regression-spec source
+                                                       emitter-state generated-code))
 
 ;; -----------------------------------------------------------------------------
-(defmethod verify-no-regression ((regression-spec-type (eql :type)) regression-spec source emitter-state generated-code)
+(defmethod verify-no-regression ((regression-spec-type (eql :type)) regression-spec source
+                                                                    emitter-state generated-code)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defmethod verify-no-regression ((regression-spec-type (eql :function)) regression-spec source emitter-state generated-code)
+(defmethod verify-no-regression ((regression-spec-type (eql :function)) regression-spec source
+                                                                        emitter-state generated-code)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defmethod verify-no-regression ((regression-spec-type (eql :result)) regression-spec source emitter-state generated-code)
+(defmethod verify-no-regression ((regression-spec-type (eql :result)) regression-spec source
+                                                                      emitter-state generated-code)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -2145,7 +2231,8 @@ to the previous line."
         (parse-result-match))))
 
 (deftest test-parse-spec-ignored-text ()
-  (test-parser parse-spec-ignored-text (format nil "fooi /* fo~Co */ ;[] /*#FOO" #\Newline) :is-match-p t :end-position 23 :line-breaks-at '(0 11)))
+  (test-parser parse-spec-ignored-text (format nil "fooi /* fo~Co */ ;[] /*#FOO" #\Newline)
+               :is-match-p t :end-position 23 :line-breaks-at '(0 11)))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-spec-key (scanner state)
@@ -2332,5 +2419,5 @@ the resulting Lisp expression."
     ;////TODO: need to do a pre-pass to gather all types
     (mapc (lambda (ast) (emit ast emitter-state)) asts)
     (values
-     (emitter-result emitter-state)
+     (get-emitted-code emitter-state)
      asts)))
