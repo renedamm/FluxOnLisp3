@@ -5,7 +5,7 @@ module Test
 	abstract immutable type Number;
 	final sealed immutable type Integer : Number;
 
-	/*#RESULT: Value=0 */
+	/*#CALL: Function=Test Result=2 */
 	method Test() : Integer
 	{
 		return 0;

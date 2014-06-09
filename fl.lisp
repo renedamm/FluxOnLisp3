@@ -23,6 +23,9 @@
   #-darwin
   #P"C:/Users/Rene Damm/Dropbox/Workspaces/FluxOnLisp/RegressionTests")
 
+(defparameter *flux-default-package* (defpackage :flux-program
+                                       (:use :common-lisp)))
+
 ;;;;============================================================================
 ;;;;    Test Framework.
 ;;;;============================================================================
@@ -697,6 +700,10 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-external-modifier (ast-modifier)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ast-clause (ast-node)
   (expression
    :reader ast-contract-expression
@@ -875,14 +882,9 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod initialize-instance :after ((id ast-identifier) &key)
-  ;; Convert 'name' slot to symbol, if it isn't one already.
   (let ((name (ast-id-name id)))
     (if (not (symbolp name))
-        (setf (slot-value id 'name) (intern name)))))
-
-(deftest test-ast-identifier-initialize ()
-  (let ((id (make-instance 'ast-identifier :name "test")))
-    (test (symbolp (ast-id-name id)))))
+      (error (format nil "Expecting symbol for name of identifier but got '~a' instead." name)))))
 
 ;; -----------------------------------------------------------------------------
 (defun identifier-to-string (id)
@@ -895,10 +897,11 @@ to the previous line."
            (concatenate 'string (identifier-to-string qualifier) "::" (symbol-name (ast-id-name id)))))))
 
 (deftest test-identifier-to-string ()
-  (let ((id1 (make-instance 'ast-identifier :name "test")))
+  (let ((id1 (make-instance 'ast-identifier :name (intern "test"))))
     (test-equal "test" (identifier-to-string id1))))
 
 ;; -----------------------------------------------------------------------------
+;;////TODO: need to do proper symbol lookups and generate fully qualified IDs for every use
 (defun identifier-to-lisp (id)
   (intern (identifier-to-string id)))
 
@@ -910,8 +913,12 @@ to the previous line."
         (find-if (lambda (modifier) (typep modifier type)) (ast-list-nodes modifiers)))))
 
 (deftest test-definition-has-modifier-p ()
-  (let ((abstract-ast (parse-result-value (parse-definition (make-string-scanner "abstract type Foobar;") (make-instance 'parser-state))))
-        (plain-ast (parse-result-value (parse-definition (make-string-scanner "type Foobar;") (make-instance 'parser-state)))))
+  (let ((abstract-ast (parse-result-value
+                        (parse-definition (make-string-scanner "abstract type Foobar;")
+                                          (make-instance 'parser-state))))
+        (plain-ast (parse-result-value
+                     (parse-definition (make-string-scanner "type Foobar;")
+                                       (make-instance 'parser-state)))))
     (test (definition-has-modifier-p abstract-ast 'ast-abstract-modifier))
     (test (not (definition-has-modifier-p plain-ast 'ast-abstract-modifier)))))
 
@@ -921,9 +928,99 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-asts ()
-  (test-ast-identifier-initialize)
   (test-identifier-to-string)
   (test-definition-has-modifier-p))
+
+;;;;============================================================================
+;;;;    IRs.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defclass ir-node ()
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ir-definition (ir-node)
+  (namespace
+   scope
+   (name
+     :reader definition-name
+     :initarg :name)
+   (implementations
+     :reader definition-implementations
+     :initform nil)))
+
+;; -----------------------------------------------------------------------------
+(defclass ir-function-definition (ir-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ir-implementation (ir-node)
+  (definition
+   ast))
+
+;; -----------------------------------------------------------------------------
+(defclass ir-function-implementation (ir-implementation)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ir-scope (ir-node)
+  ((modules
+     :initform (make-instance 'ir-namespace))
+   (types
+     :initform (make-instance 'ir-namespace))
+   (functions
+     :initform (make-instance 'ir-namespace))
+   (variables
+     :initform (make-instance 'ir-namespace))
+   (definitions
+     :initform nil)))
+
+;; -----------------------------------------------------------------------------
+(defclass ir-namespace (ir-node)
+  (name
+   parent-namespace
+   scope
+   (children
+     :reader namespace-children
+     :initform nil)
+   (definitions)))
+
+;; -----------------------------------------------------------------------------
+(defclass ir-program (ir-node)
+  ((name
+     :reader program-name
+     :initform "flux-program"
+     :initarg :name)
+   (global-scope
+     :reader global-scope
+     :initform (make-instance 'ir-scope))))
+
+;; -----------------------------------------------------------------------------
+;;////REVIEW: does this really need to be hinged as high up as ir-node?
+(defmethod inner-scope ((node ir-node))
+  nil)
+
+;; -----------------------------------------------------------------------------
+(defmethod outer-scope ((node ir-node))
+  nil)
+
+;; -----------------------------------------------------------------------------
+(defmethod find-child-namespace ((namespace ir-namespace))
+  ())
+
+;;;;============================================================================
+;;;;    Lookups.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defclass symbol-table ()
+  (scope-stack
+   usings))
+
+;; -----------------------------------------------------------------------------
+(defun lookup-definition (namespace identifier)
+  ())
 
 ;;;;============================================================================
 ;;;;    Naming Conventions.
@@ -1138,7 +1235,9 @@ to the previous line."
 (defmethod (setf scanner-position) :before (position (scanner string-scanner))
   (if (or (< position 0)
           (> position (length (slot-value scanner 'string))))
-      (error (format nil "Position ~a out of range for string ~a used by string-scanner!" position (slot-value scanner 'string)))))
+      (error (format nil "Position ~a out of range for string ~a used by string-scanner!"
+                     position
+                     (slot-value scanner 'string)))))
 
 (deftest test-string-scanner-setf-position ()
   (let ((scanner (make-string-scanner "foo")))
@@ -1263,7 +1362,20 @@ to the previous line."
     :initarg :line-break-table)
    (diagnostics
     :reader parser-diagnostics
-    :initarg :diagnostics)))
+    :initarg :diagnostics)
+   (package-for-symbols
+    :reader package-for-symbols
+    :initarg :package-for-symbols
+    :initform *flux-default-package*)))
+
+;; -----------------------------------------------------------------------------
+(defmethod initialize-instance :after ((instance parser-state) &key)
+  (let* ((symbol-package-name (package-for-symbols instance))
+         (symbol-package (find-package symbol-package-name)))
+    (if (not symbol-package)
+      (progn
+        (setf symbol-package (defpackage symbol-package-name (:use :common-lisp)))
+        (setf (slot-value instance 'package-for-symbols) symbol-package)))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
@@ -1471,7 +1583,10 @@ to the previous line."
       ;; Define a dummy parser that matches "a".
       ((parse-a (scanner state)
          (if (scanner-match scanner #\a)
-             (parse-result-match (make-instance 'ast-node :source-region (make-source-region (1- (scanner-position scanner)) (scanner-position scanner))))
+             (parse-result-match (make-instance 'ast-node
+                                                :source-region (make-source-region
+                                                                 (1- (scanner-position scanner))
+                                                                 (scanner-position scanner))))
              (parse-result-no-match)))
 
        ;; Parser that matches "a, a, a...".
@@ -1496,7 +1611,9 @@ to the previous line."
                  `(if (scanner-match-keyword scanner ,modifier)
                       (return-from parse-modifier (parse-result-match
                                                    (make-instance ,ast-type
-                                                                  :source-region (make-source-region saved-position (scanner-position scanner))))))))
+                                                                  :source-region (make-source-region
+                                                                                   saved-position
+                                                                                   (scanner-position scanner))))))))
       (match "abstract" 'ast-abstract-modifier)
       (match "immutable" 'ast-immutable-modifier)
       (match "mutable" 'ast-mutable-modifier)
@@ -1546,13 +1663,13 @@ to the previous line."
              (scanner-read-next scanner))
           (parse-result-match (make-instance 'ast-identifier
                                              :source-region (make-source-region start-position (scanner-position scanner))
-                                             :name (intern buffer))))
+                                             :name (intern buffer (package-for-symbols state)))))
         (parse-result-no-match))))
 
 (deftest test-parse-identifier-simple-name ()
   (test-parser parse-identifier "test"
                :end-position 4 :is-match-p t :expected-type 'ast-identifier
-               :checks ((test-equal (intern "test") (ast-id-name ast))
+               :checks ((test-equal (intern "test" *flux-default-package*) (ast-id-name ast))
                         (test-equal nil (ast-id-qualifier ast)))))
 
 (deftest test-parse-identifier ()
@@ -1911,6 +2028,14 @@ to the previous line."
   (test-parse-compilation-unit-simple))
 
 ;;;;============================================================================
+;;;;    .
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defmethod collect-implementations ()
+  ())
+
+;;;;============================================================================
 ;;;;    Emitter.
 ;;;;============================================================================
 
@@ -1940,6 +2065,7 @@ to the previous line."
    types))
 
 ;; -----------------------------------------------------------------------------
+;;////TODO: this has to go
 (defparameter *object-class-name* (intern "Object"))
 
 ;; -----------------------------------------------------------------------------
@@ -2192,6 +2318,13 @@ to the previous line."
     :initarg :data)))
 
 ;; -----------------------------------------------------------------------------
+(defun get-regression-spec-argument (regression-spec key)
+  (let ((key-value-pairs (regression-spec-data regression-spec)))
+    (if key-value-pairs
+      (cdr (assoc key (ast-list-nodes key-value-pairs)))
+      nil)))
+
+;; -----------------------------------------------------------------------------
 (defgeneric verify-no-regression (regression-spec-type regression-spec source
                                                        emitter-state generated-code))
 
@@ -2206,9 +2339,11 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
-(defmethod verify-no-regression ((regression-spec-type (eql :result)) regression-spec source
-                                                                      emitter-state generated-code)
-  ())
+(defmethod verify-no-regression ((regression-spec-type (eql :call)) regression-spec source
+                                                                    emitter-state generated-code)
+  (let ((function (get-regression-spec-argument regression-spec :function))
+        (result (get-regression-spec-argument regression-spec :result)))
+    (test-equal result (funcall (intern function)))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-spec-ignored-text (scanner state)
@@ -2302,7 +2437,7 @@ to the previous line."
 
        (setf spec-type (cond ((scanner-match-sequence scanner "TYPE:") :type)
                              ((scanner-match-sequence scanner "FUNCTION:") :function)
-                             ((scanner-match-sequence scanner "RESULT:") :result)
+                             ((scanner-match-sequence scanner "CALL:") :call)
                              (t (not-implemented "Unrecognized regression spec type"))))
 
        (setf values (parse-spec-key-value-pair-list scanner state))
@@ -2335,23 +2470,28 @@ to the previous line."
   (test-parse-spec-list))
 
 ;; -----------------------------------------------------------------------------
-(defun run-regression-tests ()
+(deftest run-regression-tests ()
   (flet ((test-file (pathname)
            (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
-               (progn
+               (with-test-name (pathname)
                  (print (format nil "--- ~a ---" pathname))
                  (let* ((test-package-name :flux-regression-tests)
                         (source (make-source pathname))
-                        (regression-specs (parse-result-value (parse-spec-list (make-string-scanner (source-text source)) (make-instance 'parser-state))))
+                        (regression-specs (parse-result-value
+                                            (parse-spec-list
+                                              (make-string-scanner (source-text source))
+                                              (make-instance 'parser-state))))
                         (emitter-state (make-instance 'emitter-state
                                                       :package-name test-package-name))
                         ast
                         code)
-                   (parse source)
+                   (parse source :package-for-symbols test-package-name)
                    (setf code (emit (source-ast source) emitter-state))
                    (pprint code)
-                   (mapc (lambda (spec) (verify-no-regression (regression-spec-type spec) spec source emitter-state code)) regression-specs)
-                   (mapc #'eval code)
+                   (mapc (lambda (x) (print x) (eval x)) code)
+                   (mapc (lambda (spec)
+                           (verify-no-regression (regression-spec-type spec) spec source emitter-state code))
+                         regression-specs)
                    (in-package :flux)
                    (delete-package test-package-name))))))
     (walk-directory *regression-suite-directory* #'test-file :directories nil))
@@ -2374,10 +2514,11 @@ to the previous line."
   (test-parse-code-string))
 
 ;; -----------------------------------------------------------------------------
-(defmethod parse ((code source) &key)
+(defmethod parse ((code source) &key package-for-symbols)
   (let* ((state (make-instance 'parser-state
                                :line-break-table (source-line-breaks code)
-                               :diagnostics (source-diagnostics code)))
+                               :diagnostics (source-diagnostics code)
+                               :package-for-symbols (if package-for-symbols package-for-symbols *flux-default-package*)))
          (scanner (make-string-scanner (source-text code)))
          (result (parse-compilation-unit scanner state))
          (ast (parse-result-value result)))
@@ -2391,8 +2532,8 @@ to the previous line."
       (test (typep ast 'ast-compilation-unit)))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod parse ((code string) &key)
-  (parse (make-source code)))
+(defmethod parse ((code string) &key package-for-symbols)
+  (parse (make-source code) :package-for-symbols package-for-symbols))
 
 (deftest test-parse-code-string ()
   (destructuring-bind (ast)
@@ -2400,10 +2541,10 @@ to the previous line."
     (test (typep ast 'ast-compilation-unit))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod parse ((code pathname) &key)
+(defmethod parse ((code pathname) &key package-for-symbols)
   (if (directory-pathname-p code)
       (not-implemented "Compiling entire directories")
-      (parse (make-source code))))
+      (parse (make-source code) :package-for-symbols package-for-symbols)))
 
 ;; -----------------------------------------------------------------------------
 (defun translate (source &key package-name)

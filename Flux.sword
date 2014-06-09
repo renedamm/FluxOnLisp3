@@ -1,114 +1,142 @@
 
-compilation_unit -> definition*
+compilation_unit ->
+	  definition*
 
-definition -> attributes? modifier* definition_keyword identifier type_parameters? value_parameters? ( ":" type? )? clause* definition_body
+definition ->
+	  attributes?
+	  modifier* definition_keyword identifier type_parameters? value_parameters? ( ":" type? )?
+	  clause*
+	  definition_body
 
-definition_keyword -> "type"
-		    | "function"
-		    | "object"
-		    | "method"
-		    | "field"
-		    | "module"
-		    | "features"
-		    | "namespace"
-		    | "local"
+definition_keyword ->
+	  "type"
+    | "function"
+    | "object"
+    | "method"
+    | "field"
+    | "module"
+    | "features"
+    | "namespace"
+    | "local"
 
-definition_body -> ";"
-		 | "=" expression ";"
-		 | "{" statement* "}"
+definition_body ->
+	  ";"
+	| "=" expression ";"
+	| "{" statement* "}"
 
-statement -> ";"
-	   | "{" statement* "}"
-	   | "loop" ( "(" ... ")" )? statement
-	   | "continue" ";"
-	   | "break" ";"
-	   | "throw" expression ";"
-	   | "return" expression ";"
-	   | "yield" expression ";"
-	   | "if" "(" expression ")" statement ( "else" statement )?
-	   | "switch" "(" expression ")" "{" ( "case" expression,"," ":" statement )* "}"
-	   | "try" ( "(" expression ")" )? statement ( "finally" statement )?
-	   | definition
-	   | expression ";"
+statement ->
+	  ";"
+	| "{" statement* "}"
+	| "loop" ( "(" ... ")" )? statement
+	| "continue" ";"
+	| "break" ";"
+	| "throw" expression ";"
+	| "return" expression ";"
+	| "yield" expression ";"
+	| "if" "(" expression ")" statement ( "else" statement )?
+	| "switch" "(" expression ")" "{" ( "case" expression,"," ":" statement )* "}"
+	| "try" ( "(" expression ")" )? statement ( "finally" statement )?
+	| definition
+	| expression ";"
 
 ////REVIEW: don't try to solve operator precedence at the syntactic level; this is semantics
 
-expression -> "(" expression ")"
-	    | identifier type_arguments value_arguments
-	    | expression "." identifier
-	    | expression binary_operator expression
-	    | unary_prefix_operator expression
-	    | expression unary_postfix_operator
-	    | "object" ":" type ( "{" ... "}" )?
-	    | literal
+expression ->
+	  "(" expression ")"
+	| identifier type_arguments value_arguments
+	| expression "." identifier
+	| expression binary_operator expression
+	| unary_prefix_operator expression
+	| expression unary_postfix_operator
+	| "object" ":" type ( "{" ... "}" )?
+	| literal
 
-literal -> integer_literal
+literal ->
+	  integer_literal
 
-integer_literal -> '[0-9]+(b|B|l|L)'
-	 | '0x[0-9A-Fa-f]+(b|B|l|L)'
+integer_literal ->
+	  '[0-9]+(b|B|l|L)'
+	| '0x[0-9A-Fa-f]+(b|B|l|L)'
 
-binary_operator -> "&&"
-		 | "||"
-		 | "+"
-		 | "-"
-		 | "/"
-		 | "*"
-		 | "%"
+binary_operator ->
+	  "&&"
+	| "||"
+	| "+"
+	| "-"
+	| "/"
+	| "*"
+	| "%"
 
-unary_prefix_operator -> "++"
-		       | "--"
-		       | "!"
-		       | "-"
+unary_prefix_operator ->
+	  "++"
+    | "--"
+    | "!"
+    | "-"
 
-unary_postfix_operator -> "++"
-		        | "--"
+unary_postfix_operator ->
+	  "++"
+    | "--"
 
-type_parameters -> "<" {type_parameter:::","} ">"
+type_parameters ->
+	  "<" {type_parameter:::","} ">"
 
-type_parameter -> ( modifier* identifier ":" )? type ( "=" type )?
+type_parameter ->
+	  ( modifier* identifier ":" )? type ( "=" type )?
 
-value_parameters -> "(" {value_parameter:::","} ")"
+value_parameters ->
+	  "(" {value_parameter:::","} ")"
 
-value_parameter -> ( modifier* identifier ":" )? type ( "=" expression )?
+value_parameter ->
+	  ( modifier* identifier ":" )? type ( "=" expression )?
 
-type_arguments -> "<" {type:::","} ">"
+type_arguments ->
+	  "<" {type:::","} ">"
 
-value_arguments -> "(" {expression:::","} ")"
+value_arguments ->
+	  "(" {expression:::","} ")"
 
-type -> modifier* identifier type_arguments?
-      | "(" {type_parameter:::","} ")" // May be a tuple type or just a parenthesized type expression.
-      | type "->" type
-      | type "&" type
-      | type "|" type
+type ->
+	  modifier* identifier type_arguments?
+	| "(" {type_parameter:::","} ")" // May be a tuple type or just a parenthesized type expression.
+    | type "->" type
+    | type "&" type
+    | type "|" type
 
-identifier -> ( "::" )? {name:::"::"}
+identifier ->
+	  ( "::" )? {name:::"::"}
 
-name -> '[[:APHABETIC]_][[:APHANUMERIC:]_]*(!)?'
+name ->
+	  '[[:APHABETIC]_][[:APHANUMERIC:]_]*(!)?'
 
-modifier -> "abstract"
-	  | "immutable"
-	  | "mutable"
-	  | "extend"
-	  | "instantiable"
-	  | "import"
-	  | "include"
-	  | "final"
-	  | "sealed"
-	  | "iterator"
-	  | "before"
-	  | "after"
-	  | "around"
-	  | "default"
-	  | "read"
-	  | "write"
-	  | "private"
-	  | "using"
+modifier ->
+	  "abstract"
+	| "immutable"
+	| "mutable"
+	| "extend"
+	| "instantiable"
+	| "import"
+	| "include"
+	| "final"
+	| "sealed"
+	| "iterator"
+	| "before"
+	| "after"
+	| "around"
+	| "default"
+	| "read"
+	| "write"
+	| "private"
+	| "using"
+	| "external"
 
-clause -> "when" expression
-        | "requires" expression
+clause ->
+	  "when" expression
+    | "requires" expression
 	| "ensures" expression
 	| "invariant" expression
 
-attributes -> ( "[" attribute* "]" )*
+attributes ->
+	  ( "[" attribute* "]" )*
 
-attribute -> identifier ( "(" value_arguments ")" )?
+attribute ->
+	  identifier ( "(" value_arguments ")" )?
