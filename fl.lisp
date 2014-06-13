@@ -1,5 +1,10 @@
 ; This code is pretty much the opposite of idiomatic Lisp...
 
+; Turn off optimizations to help debugging code.
+(declaim (optimize (speed 0)
+                   (safety 3)
+                   (debug 3)))
+
 (in-package :cl-user)
 
 (defpackage :flux
@@ -359,6 +364,8 @@
 
 ;; -----------------------------------------------------------------------------
 (defun make-source-region (left right)
+  (if (typep right 'scanner)
+    (setf right (scanner-position right)))
   (assert (<= left right))
   (cons left right))
 
@@ -941,8 +948,9 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-definition (ir-node)
-  (namespace
-   scope
+  ((namespace
+     :reader definition-namespace
+     :initarg :namespace)
    (name
      :reader definition-name
      :initarg :name)
@@ -955,17 +963,33 @@ to the previous line."
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ir-module-definition (ir-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ir-implementation (ir-node)
-  (definition
-   ast))
+  ((definition
+     :reader implementation-definition
+     :initarg :definition)
+   (ast
+     :reader implementation-ast
+     :initarg :ast
+     :initform nil)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-function-implementation (ir-implementation)
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ir-module-implementation (ir-implementation)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ir-scope (ir-node)
-  ((modules
+  ((owner
+     :reader scope-owner
+     :initarg :owner)
+   (modules
      :initform (make-instance 'ir-namespace))
    (types
      :initform (make-instance 'ir-namespace))
@@ -978,13 +1002,23 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-namespace (ir-node)
-  (name
-   parent-namespace
+  ((name
+     :reader namespace-name
+     :initarg :name)
+   (parent-namespace
+     :reader namespace-parent
+     :initarg :parent)
    scope
    (children
      :reader namespace-children
      :initform nil)
-   (definitions)))
+   (definitions
+     :reader namespace-definitions
+     :initform nil)))
+
+;; -----------------------------------------------------------------------------
+(defclass ir-settings (ir-node)
+  ())
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-program (ir-node)
@@ -994,7 +1028,8 @@ to the previous line."
      :initarg :name)
    (global-scope
      :reader global-scope
-     :initform (make-instance 'ir-scope))))
+     :initform (make-instance 'ir-scope))
+   naming-conventions))
 
 ;; -----------------------------------------------------------------------------
 ;;////REVIEW: does this really need to be hinged as high up as ir-node?
@@ -1007,19 +1042,6 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod find-child-namespace ((namespace ir-namespace))
-  ())
-
-;;;;============================================================================
-;;;;    Lookups.
-;;;;============================================================================
-
-;; -----------------------------------------------------------------------------
-(defclass symbol-table ()
-  (scope-stack
-   usings))
-
-;; -----------------------------------------------------------------------------
-(defun lookup-definition (namespace identifier)
   ())
 
 ;;;;============================================================================
@@ -1036,6 +1058,15 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defgeneric normalize-name (name convention))
+
+;;;;============================================================================
+;;;;    Name Mangling.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+;; A name manger takes
+(defclass name-mangler ()
+  ())
 
 ;;;;============================================================================
 ;;;;    Scanners.
@@ -1242,9 +1273,9 @@ to the previous line."
 (deftest test-string-scanner-setf-position ()
   (let ((scanner (make-string-scanner "foo")))
     (setf (scanner-position scanner) 0)
-    (test (scanner-position scanner) 0)
+    (test-equal 0 (scanner-position scanner))
     (setf (scanner-position scanner) 3)
-    (test (scanner-position scanner) 3)))
+    (test-equal 3 (scanner-position scanner))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-scanners ()
@@ -1259,6 +1290,20 @@ to the previous line."
   (test-string-scanner-match)
   (test-string-scanner-match-if)
   (test-string-scanner-setf-position))
+
+;;;;============================================================================
+;;;;    Parser Actions
+;;;;============================================================================
+
+;; The translation logic runs from within the parser .
+
+;; -----------------------------------------------------------------------------
+;; The default parse action is to just create an AST node whose type corresponds
+;; to the name of the production and which is initialized from the given arguments.
+(defmethod parse-action ((production symbol) region state &rest rest)
+  (apply 'make-instance (nconc (list production
+                                     :source-region region)
+                               rest)))
 
 ;;;;============================================================================
 ;;;;    Parsers.
@@ -1461,25 +1506,25 @@ to the previous line."
   (test-parser parse-whitespace "foo" :end-position 0 :is-match-p nil))
 
 (deftest test-parse-whitespace-consumes-whitespace ()
-  (test-parser parse-whitespace (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab) :is-match-p t :end-position 4))
+  (test-parser parse-whitespace
+               (format nil " ~C~C~Cfoo" #\Return #\Newline #\Tab)
+               :is-match-p t :end-position 4))
 
 (deftest test-parse-whitespace-consumes-single-line-comments ()
-  (test-parser parse-whitespace (format nil " // foo~Cbar" #\Newline) :is-match-p t :end-position 8 :line-breaks-at '(0 8)))
+  (test-parser parse-whitespace
+               (format nil " // foo~Cbar" #\Newline)
+               :is-match-p t :end-position 8 :line-breaks-at '(0 8)))
 
 (deftest test-parse-whitespace-consume-multi-line-comments ()
-  (test-parser parse-whitespace (format nil " /* foo /* ~C bar */ */foo" #\Newline) :is-match-p t :end-position 22 :line-breaks-at '(0 12)))
+  (test-parser parse-whitespace
+               (format nil " /* foo /* ~C bar */ */foo" #\Newline)
+               :is-match-p t :end-position 22 :line-breaks-at '(0 12)))
 
 (deftest test-parse-whitespace ()
   (test-parse-whitespace-does-not-consume-non-whitespace)
   (test-parse-whitespace-consumes-whitespace)
   (test-parse-whitespace-consumes-single-line-comments)
   (test-parse-whitespace-consume-multi-line-comments))
-
-;; -----------------------------------------------------------------------------
-;; Combination that makes sure the given parser consumes all available input.
-;; Otherwise produces a parse error.
-(defmacro parse-all-input (parser-name scanner state)
-  ())
 
 ;; -----------------------------------------------------------------------------
 ;; Combinator that turns another parser into a list parser.  This combinator can be broken
@@ -1574,9 +1619,10 @@ to the previous line."
                  (return))))
                   
            (setf ,list (nreverse ,list))
-           (make-instance 'ast-list 
-                          :source-region (make-source-region ,start-position (scanner-position ,scanner-value))
-                          :nodes ,list))))))
+           (parse-action 'ast-list
+                         (make-source-region ,start-position ,scanner-value)
+                         state
+                         :nodes ,list))))))
 
 (deftest test-parse-list ()
   (labels
@@ -1610,10 +1656,9 @@ to the previous line."
     (macrolet ((match (modifier ast-type)
                  `(if (scanner-match-keyword scanner ,modifier)
                       (return-from parse-modifier (parse-result-match
-                                                   (make-instance ,ast-type
-                                                                  :source-region (make-source-region
-                                                                                   saved-position
-                                                                                   (scanner-position scanner))))))))
+                                                    (parse-action ,ast-type
+                                                                  (make-source-region saved-position scanner)
+                                                                  state))))))
       (match "abstract" 'ast-abstract-modifier)
       (match "immutable" 'ast-immutable-modifier)
       (match "mutable" 'ast-mutable-modifier)
@@ -1661,9 +1706,10 @@ to the previous line."
                  (return))
              (vector-push-extend next-char buffer)
              (scanner-read-next scanner))
-          (parse-result-match (make-instance 'ast-identifier
-                                             :source-region (make-source-region start-position (scanner-position scanner))
-                                             :name (intern buffer (package-for-symbols state)))))
+          (parse-result-match (parse-action 'ast-identifier
+                                            (make-source-region start-position scanner)
+                                            state
+                                            :name (intern buffer (package-for-symbols state)))))
         (parse-result-no-match))))
 
 (deftest test-parse-identifier-simple-name ()
@@ -1692,9 +1738,10 @@ to the previous line."
     (let ((expression (parse-expression scanner state)))
       (if (parse-result-no-match-p expression)
           (not-implemented "parse error; expecting expression"))
-      (parse-result-match (make-instance clause-type
-                                         :source (make-source-region saved-position (scanner-position scanner))
-                                         :expression (parse-result-value expression))))))
+      (parse-result-match (parse-action clause-type
+                                        (make-source-region saved-position scanner)
+                                        state
+                                        :expression (parse-result-value expression))))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause-list (scanner state)
@@ -1714,8 +1761,9 @@ to the previous line."
          (left-type (cond ((scanner-match scanner #\()
                            (parse-whitespace scanner state)
                            (if (scanner-match scanner #\))
-                               (parse-result-match (make-instance 'ast-nothing-type
-                                                                  :source-region (make-source-region saved-position (scanner-position scanner))))
+                               (parse-result-match (parse-action 'ast-nothing-type
+                                                                 (make-source-region saved-position scanner)
+                                                                 state))
                                (not-implemented "parenthesized type expressions")))
                           (t
                            (let (modifiers name)
@@ -1724,10 +1772,11 @@ to the previous line."
                              (setf name (parse-identifier scanner state))
                              (if (parse-result-no-match-p name)
                                  (not-implemented "parse error; expecting type name"))
-                             (parse-result-match (make-instance 'ast-named-type
-                                                                :source-region (make-source-region saved-position (scanner-position scanner))
-                                                                :name (parse-result-value name)
-                                                                :modifiers (parse-result-value modifiers))))))))
+                             (parse-result-match (parse-action 'ast-named-type
+                                                               (make-source-region saved-position scanner)
+                                                               state
+                                                               :name (parse-result-value name)
+                                                               :modifiers (parse-result-value modifiers))))))))
     (parse-whitespace scanner state)
 
     (let ((combination-type (cond ((scanner-match-sequence scanner "->")
@@ -1744,10 +1793,11 @@ to the previous line."
       (let ((right-type (parse-type scanner state)))
         (if (parse-result-no-match-p right-type)
             (not-implemented "parse error; expecting right type"))
-        (parse-result-match (make-instance combination-type
-                                           :source-region (make-source-region saved-position (scanner-position scanner))
-                                           :left-type (parse-result-value left-type)
-                                           :right-type (parse-result-value right-type)))))))
+        (parse-result-match (parse-action combination-type
+                                          (make-source-region saved-position scanner)
+                                          state
+                                          :left-type (parse-result-value left-type)
+                                          :right-type (parse-result-value right-type)))))))
 
 (deftest test-parse-simple-named-type ()
   (test-parser parse-type "Foobar" :is-match-p t :expected-type 'ast-named-type))
@@ -1800,9 +1850,10 @@ to the previous line."
                        (not-implemented "parse error; expecting expression after 'return'"))
                    (if (not (scanner-match scanner #\;))
                        (not-implemented "parse error; expecting ';'"))))
-             (parse-result-match (make-instance 'ast-return-statement
-                                                :source-region (make-source-region saved-position (scanner-position scanner))
-                                                :expression (parse-result-value expression)))))
+             (parse-result-match (parse-action 'ast-return-statement
+                                               (make-source-region saved-position scanner)
+                                               state
+                                               :expression (parse-result-value expression)))))
           (t
            (parse-result-no-match)))))
 
@@ -1836,9 +1887,10 @@ to the previous line."
                         (return))
                     (scanner-read-next scanner)
                     (setf value (+ (digit-char-to-integer next-char) (* value 10))))
-                 (parse-result-match (make-instance 'ast-integer-literal
-                                                    :source-region (make-source-region saved-position (scanner-position scanner))
-                                                    :value value))))
+                 (parse-result-match (parse-action 'ast-integer-literal
+                                                   (make-source-region saved-position scanner)
+                                                   state
+                                                   :value value))))
               (t (not-implemented "literal"))))))
 
 (deftest test-parse-integer-literal ()
@@ -1951,17 +2003,18 @@ to the previous line."
                      (parse-statement-list scanner state)))))
 
     ;; Create AST node.
-    (setf ast (make-instance definition-class
-                             :source-region (make-source-region start-position (scanner-position scanner))
-                             :attributes attributes
-                             :modifiers modifiers
-                             :name name
-                             :type-parameters type-parameters
-                             :value-parameters value-parameters
-                             :type type
-                             :clauses clauses
-                             :value value
-                             :body body))
+    (setf ast (parse-action definition-class
+                            (make-source-region start-position scanner)
+                            state
+                            :attributes attributes
+                            :modifiers modifiers
+                            :name name
+                            :type-parameters type-parameters
+                            :value-parameters value-parameters
+                            :type type
+                            :clauses clauses
+                            :value value
+                            :body body))
 
     (parse-result-match ast)))
 
@@ -1985,11 +2038,15 @@ to the previous line."
 (defun parse-compilation-unit (scanner state)
   (let* ((start-position (scanner-position scanner))
          (definitions (parse-list parse-definition scanner state))
-         (result (parse-result-match (make-instance 'ast-compilation-unit
-                                                    :source-region (make-source-region start-position (scanner-position scanner))
-                                                    :definitions (if (parse-result-no-match-p definitions)
-                                                                     (make-instance 'ast-list :source-region (make-source-region start-position start-position))
-                                                                     (parse-result-value definitions))))))
+         (result (parse-result-match
+                   (parse-action 'ast-compilation-unit
+                                 (make-source-region start-position scanner)
+                                 state
+                                 :definitions (if (parse-result-no-match-p definitions)
+                                                (parse-action 'ast-list
+                                                              (make-source-region start-position start-position)
+                                                              state)
+                                                (parse-result-value definitions))))))
     (if (not (scanner-at-end-p scanner))
         (not-implemented "parse error; unrecognized input"))
     result))
@@ -2032,7 +2089,7 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defmethod collect-implementations ()
+(defmethod collect-implementations ((ast ast-compilation-unit) ir-context)
   ())
 
 ;;;;============================================================================
