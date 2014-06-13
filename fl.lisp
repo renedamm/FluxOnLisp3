@@ -320,6 +320,19 @@
   (test-equal 15 (digit-char-to-integer #\f)))
 
 ;; -----------------------------------------------------------------------------
+(defmacro lazy-initialize-slot (instance slot-name &body init-form)
+  (with-gensyms (instance-value slot-name-value slot-value)
+    `(let* ((,instance-value ,instance)
+            (,slot-name-value ,slot-name)
+            (,slot-value (slot-value ,instance-value ,slot-name-value)))
+       (if (not ,slot-value)
+         (setf ,slot-value
+               (setf (slot-value ,instance-value ,slot-name-value)
+                     (progn
+                       ,@init-form))))
+       ,slot-value)))
+     
+;; -----------------------------------------------------------------------------
 (defsuite test-utilities ()
   (test-insert-into-array))
 
@@ -648,7 +661,7 @@ to the previous line."
 (defclass ast-identifier (ast-node)
   ((qualifier
     :reader ast-id-qualifier
-    :initarg qualifier
+    :initarg :qualifier
     :initform nil)
    (name
     :reader ast-id-name
@@ -990,13 +1003,13 @@ to the previous line."
      :reader scope-owner
      :initarg :owner)
    (modules
-     :initform (make-instance 'ir-namespace))
+     :initform nil)
    (types
-     :initform (make-instance 'ir-namespace))
+     :initform nil)
    (functions
-     :initform (make-instance 'ir-namespace))
+     :initform nil)
    (variables
-     :initform (make-instance 'ir-namespace))
+     :initform nil)
    (definitions
      :initform nil)))
 
@@ -1004,11 +1017,16 @@ to the previous line."
 (defclass ir-namespace (ir-node)
   ((name
      :reader namespace-name
-     :initarg :name)
+     :initarg :name
+     :initform nil)
    (parent-namespace
      :reader namespace-parent
-     :initarg :parent)
-   scope
+     :initarg :parent
+     :initform nil)
+   (scope
+     :reader namespace-scope
+     :initarg :scope
+     :initform nil)
    (children
      :reader namespace-children
      :initform nil)
@@ -1032,17 +1050,177 @@ to the previous line."
    naming-conventions))
 
 ;; -----------------------------------------------------------------------------
-;;////REVIEW: does this really need to be hinged as high up as ir-node?
-(defmethod inner-scope ((node ir-node))
-  nil)
+(defun find-definition (namespace name)
+  (let ((definitions (namespace-definitions namespace)))
+    (if definitions
+      (gethash name definitions)
+      nil)))
 
 ;; -----------------------------------------------------------------------------
-(defmethod outer-scope ((node ir-node))
-  nil)
+(defun insert-definition (namespace definition)
+  (let ((definitions (lazy-initialize-slot namespace 'definitions
+                       (make-hash-table))))
+    (setf (gethash (definition-name definition) definitions) definition)))
+
+(deftest test-insert-definition ()
+  (let ((namespace (make-instance 'ir-namespace))
+        (definition (make-instance 'ir-function-definition
+                                   :name 'test-function)))
+    (insert-definition namespace definition)
+    (test-equal definition (find-definition namespace 'test-function))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod find-child-namespace ((namespace ir-namespace))
-  ())
+(defun create-child-namespace (parent-namespace name)
+  (let ((child-namespace (make-instance 'ir-namespace
+                                        :name name
+                                        :parent parent-namespace
+                                        :scope (namespace-scope parent-namespace))))
+    (setf (slot-value parent-namespace 'children)
+          (cons child-namespace
+                (slot-value parent-namespace 'children)))
+    child-namespace))
+
+(deftest test-create-child-namespace ()
+  (let* ((parent (make-instance 'ir-namespace
+                                :name 'outer))
+         (child (create-child-namespace parent 'inner)))
+    (test-type 'ir-namespace child)
+    (test-equal 'inner (namespace-name child))
+    (test-sequence-equal (list child) (namespace-children parent))))
+
+;; -----------------------------------------------------------------------------
+(defun find-child-namespace (parent-namespace name)
+  (find-if (lambda (child-namespace)
+             (equal (namespace-name child-namespace) name))
+           (namespace-children parent-namespace)))
+
+;; -----------------------------------------------------------------------------
+(defun find-nested-child-namespace (parent-namespace identifier &key if-does-not-exist)
+  (let ((qualifier (ast-id-qualifier identifier))
+        (inner-namespace parent-namespace))
+    (if qualifier
+      (setf inner-namespace (find-nested-child-namespace parent-namespace
+                                                         qualifier
+                                                         :if-does-not-exist if-does-not-exist)))
+    (if (not inner-namespace)
+      nil
+      (let* ((name (ast-id-name identifier))
+             (child-namespace (find-child-namespace inner-namespace name)))
+        (if child-namespace
+          child-namespace
+          (cond
+            ((eq if-does-not-exist :create)
+             (create-child-namespace inner-namespace name))
+            (t nil)))))))
+
+(deftest test-find-nested-child-namespace-returns-nil ()
+  (let ((parent (make-instance 'ir-namespace
+                               :name 'outer)))
+    (test-equal nil (find-nested-child-namespace parent
+                                                 (make-instance 'ast-identifier
+                                                                :name 'inner)))))
+
+(deftest test-find-nested-child-namespace-create-if-does-not-exist ()
+  (let* ((parent (make-instance 'ir-namespace
+                                :name 'outermost))
+         (child (find-nested-child-namespace parent
+                                             (make-instance 'ast-identifier
+                                                            :name 'innermost
+                                                            :qualifier (make-instance 'ast-identifier
+                                                                                      :name 'inner))
+                                             :if-does-not-exist :create)))
+    (test-type 'ir-namespace child)
+    (test-equal 'innermost (namespace-name child))
+    (test-equal 'inner (namespace-name (namespace-parent child)))
+    (test-equal 'outermost (namespace-name (namespace-parent (namespace-parent child))))))
+
+;; -----------------------------------------------------------------------------
+(defun get-namespace-for-definitions (scope definition-kind)
+  (macrolet
+    ((lazy-initialize (slot-name)
+       `(lazy-initialize-slot scope ,slot-name
+                             (make-instance 'ir-namespace
+                                             :scope scope))))
+  (cond
+    ((eq definition-kind 'functions)
+     (lazy-initialize 'functions))
+    ((eq definition-kind 'variables)
+     (lazy-initialize 'variables))
+    ((eq definition-kind 'modules)
+     (lazy-initialize 'modules))
+    ((eq definition-kind 'types)
+     (lazy-initialize 'types))
+    (t
+     (error (format nil "Unknown definition kind '~a'" definition-kind))))))
+
+(deftest test-get-namespace-for-definitions ()
+  (let ((scope (make-instance 'ir-scope)))
+    (test-type 'ir-namespace (get-namespace-for-definitions scope 'functions))
+    (test-type 'ir-namespace (get-namespace-for-definitions scope 'variables))
+    (test-type 'ir-namespace (get-namespace-for-definitions scope 'modules))
+    (test-type 'ir-namespace (get-namespace-for-definitions scope 'types))))
+
+;; -----------------------------------------------------------------------------
+(defun lookup-namespace (scope definition-kind identifier &key if-does-not-exist)
+  (find-nested-child-namespace (get-namespace-for-definitions scope definition-kind)
+                               identifier
+                               :if-does-not-exist if-does-not-exist))
+
+(deftest test-lookup-namespace-simple ()
+  (let* ((scope (make-instance 'ir-scope))
+         (namespace (lookup-namespace scope
+                                      'functions
+                                      (make-instance 'ast-identifier
+                                                     :name 'inner
+                                                     :qualifier (make-instance 'ast-identifier
+                                                                               :name 'outer))
+                                      :if-does-not-exist :create)))
+    (test-type 'ir-namespace namespace)
+    (test-equal 'inner (namespace-name namespace))
+    (test-equal (get-namespace-for-definitions scope 'functions)
+                (namespace-parent (namespace-parent namespace)))))
+
+;; -----------------------------------------------------------------------------
+(defun find-or-create-definition (scope definition-kind identifier)
+  (let* ((top-namespace (get-namespace-for-definitions scope definition-kind))
+         (qualifier (ast-id-qualifier identifier))
+         (name (ast-id-name identifier))
+         (namespace (if qualifier
+                      (find-or-create-child-namespace top-namespace qualifier :if-does-not-exist :create)
+                      top-namespace))
+         (definition (find-definition namespace name)))
+    (if (not definition)
+      (insert-definition namespace
+                         (setf definition
+                               (make-instance
+                                 (cond ((eq definition-kind 'functions)
+                                        'ir-function-definition)
+                                       ((eq definition-kind 'modules)
+                                        'ir-module-definition)
+                                       (t
+                                        (error (format nil "Unrecognized definition kind '~a'" definition-kind))))
+                                 :namespace namespace
+                                 :name name))))
+    definition))
+
+(deftest test-find-or-create-definition-function ()
+  (let* ((scope (make-instance 'ir-scope))
+         (definition (find-or-create-definition scope
+                                                'functions
+                                                (make-instance 'ast-identifier
+                                                               :name 'my-function))))
+    (test-type 'ir-function-definition definition)
+    (test-equal 'my-function (definition-name definition))))
+
+;; -----------------------------------------------------------------------------
+(defsuite test-ir ()
+  (test-insert-definition)
+  (test-create-child-namespace)
+  (test-find-nested-child-namespace-returns-nil)
+  (test-find-nested-child-namespace-create-if-does-not-exist)
+  (test-get-namespace-for-definitions)
+  (test-lookup-namespace-simple)
+  (test-find-or-create-definition-function))
 
 ;;;;============================================================================
 ;;;;    Naming Conventions.
@@ -1305,6 +1483,20 @@ to the previous line."
                                      :source-region region)
                                rest)))
 
+;; -----------------------------------------------------------------------------
+(defmethod parse-action ((production (eql 'ast-function-definition)) region state &rest rest)
+  (let ((ast (call-next-method)))
+    (find-or-create-definition
+      (current-scope state)
+      'functions
+      (ast-definition-name ast))
+    ast))
+ 
+;; -----------------------------------------------------------------------------
+(defmethod parse-action ((production (eql 'ast-module-definition)) region state &rest rest)
+  (let ((ast (call-next-method)))
+    ()))
+
 ;;;;============================================================================
 ;;;;    Parsers.
 ;;;;============================================================================
@@ -1402,25 +1594,37 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass parser-state ()
   ((line-break-table
-    :reader line-break-table
-    :initform (make-line-break-table)
-    :initarg :line-break-table)
+     :reader line-break-table
+     :initform (make-line-break-table)
+     :initarg :line-break-table)
    (diagnostics
-    :reader parser-diagnostics
-    :initarg :diagnostics)
+     :reader parser-diagnostics
+     :initarg :diagnostics)
    (package-for-symbols
-    :reader package-for-symbols
-    :initarg :package-for-symbols
-    :initform *flux-default-package*)))
+     :reader package-for-symbols
+     :initarg :package-for-symbols
+     :initform *flux-default-package*)
+   (program
+     :reader current-program
+     :initarg :program
+     :initform (make-instance 'ir-program))
+   (current-scope
+     :reader current-scope)))
 
 ;; -----------------------------------------------------------------------------
 (defmethod initialize-instance :after ((instance parser-state) &key)
+
+  ;; Make sure that package-for-symbols is an existing package.
   (let* ((symbol-package-name (package-for-symbols instance))
          (symbol-package (find-package symbol-package-name)))
     (if (not symbol-package)
       (progn
         (setf symbol-package (defpackage symbol-package-name (:use :common-lisp)))
-        (setf (slot-value instance 'package-for-symbols) symbol-package)))))
+        (setf (slot-value instance 'package-for-symbols) symbol-package))))
+  
+  ;; Set current scope.
+  (setf (slot-value instance 'current-scope)
+        (global-scope (current-program instance))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
@@ -2083,14 +2287,6 @@ to the previous line."
   (test-parse-statement)
   (test-parse-definition)
   (test-parse-compilation-unit-simple))
-
-;;;;============================================================================
-;;;;    .
-;;;;============================================================================
-
-;; -----------------------------------------------------------------------------
-(defmethod collect-implementations ((ast ast-compilation-unit) ir-context)
-  ())
 
 ;;;;============================================================================
 ;;;;    Emitter.
