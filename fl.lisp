@@ -66,13 +66,17 @@
      ,@(loop for f in forms collect `(report-result ,f ',f))))
 
 ;; -----------------------------------------------------------------------------
-(defmacro test-equal (expected actual)
+(defmacro test-equal (expected actual &key (equal 'equal))
   (with-gensyms (expected-value actual-value)
     `(let ((,expected-value ,expected)
            (,actual-value ,actual))
-       (if (equal ,expected-value ,actual-value)
+       (if (,equal ,expected-value ,actual-value)
            (report-result t '(equal ,expected ,actual))
            (report-result nil (format nil "Expected ~a from ~a but got ~a" ,expected-value ',actual ,actual))))))
+
+;; -----------------------------------------------------------------------------
+(defmacro test-same (expected actual)
+  (test-equal expected actual :equal eq))
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-sequence-equal (expected actual)
@@ -649,7 +653,9 @@ to the previous line."
   ((nodes
     :reader ast-list-nodes
     :initarg :nodes
-    :initform nil)))
+    :initform nil)
+   (local-scope
+     :reader ast-local-scope)))
 
 ;; -----------------------------------------------------------------------------
 ;; Representation of "::" denoting the global namespace.
@@ -833,32 +839,32 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass ast-definition (ast-node)
   ((attributes
-    :reader ast-definition-attributes
-    :initarg :attributes)
+     :reader ast-definition-attributes
+     :initarg :attributes)
    (modifiers
-    :reader ast-definition-modifiers
-    :initarg :modifiers)
+     :reader ast-definition-modifiers
+     :initarg :modifiers)
    (name
-    :reader ast-definition-name
-    :initarg :name)
+     :reader ast-definition-name
+     :initarg :name)
    (type-parameters
-    :reader ast-definition-type-parameters
-    :initarg :type-parameters)
+     :reader ast-definition-type-parameters
+     :initarg :type-parameters)
    (value-parameters
-    :reader ast-definition-value-parameters
-    :initarg :value-parameters)
+     :reader ast-definition-value-parameters
+     :initarg :value-parameters)
    (clauses
-    :reader ast-definition-clauses
-    :initarg :clauses)
+     :reader ast-definition-clauses
+     :initarg :clauses)
    (type
-    :reader ast-definition-type
-    :initarg :type)
+     :reader ast-definition-type
+     :initarg :type)
    (value
-    :reader ast-definition-value
-    :initarg :value)
+     :reader ast-definition-value
+     :initarg :value)
    (body
-    :reader ast-definition-body
-    :initarg :body)))
+     :reader ast-definition-body
+     :initarg :body)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-type-definition (ast-definition)
@@ -891,8 +897,10 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass ast-compilation-unit (ast-node)
   ((definitions
-    :reader ast-unit-definitions
-    :initarg :definitions)))
+     :reader ast-unit-definitions
+     :initarg :definitions)
+   (global-scope
+     :reader ast-unit-global-scope)))
 
 ;; -----------------------------------------------------------------------------
 (defun make-ast-error (diagnostic)
@@ -952,73 +960,34 @@ to the previous line."
   (test-definition-has-modifier-p))
 
 ;;;;============================================================================
-;;;;    IRs.
+;;;;    Symbol Tables.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defclass ir-node ()
-  ())
-
-;; -----------------------------------------------------------------------------
-(defclass ir-definition (ir-node)
+(defclass declaration ()
   ((namespace
-     :reader definition-namespace
+     :reader declaration-namespace
      :initarg :namespace)
    (name
-     :reader definition-name
+     :reader declaration-name
      :initarg :name)
-   (implementations
-     :reader definition-implementations
+   (definitions
+     :reader declaration-definitions
      :initform nil)))
 
 ;; -----------------------------------------------------------------------------
-(defclass ir-function-definition (ir-definition)
-  ())
-
-;; -----------------------------------------------------------------------------
-(defclass ir-module-definition (ir-definition)
-  ())
-
-;; -----------------------------------------------------------------------------
-(defclass ir-implementation (ir-node)
-  ((definition
-     :reader implementation-definition
-     :initarg :definition)
-   (ast
-     :reader implementation-ast
-     :initarg :ast
-     :initform nil)))
-
-;; -----------------------------------------------------------------------------
-(defclass ir-function-implementation (ir-implementation)
-  ((inner-scope
-     :reader function-scope
-     :initarg :scope)))
-
-;; -----------------------------------------------------------------------------
-(defclass ir-module-implementation (ir-implementation)
-  ((inner-scope
-     :reader module-scope
-     :initarg :scope)))
-
-;; -----------------------------------------------------------------------------
-(defclass ir-scope (ir-node)
-  ((owner
-     :reader scope-owner
-     :initarg :owner)
-   (modules
+(defclass scope ()
+  ((modules
      :initform nil)
    (types
      :initform nil)
    (functions
      :initform nil)
    (variables
-     :initform nil)
-   (definitions
      :initform nil)))
 
 ;; -----------------------------------------------------------------------------
-(defclass ir-namespace (ir-node)
+(defclass namespace ()
   ((name
      :reader namespace-name
      :initarg :name
@@ -1034,54 +1003,48 @@ to the previous line."
    (children
      :reader namespace-children
      :initform nil)
-   (definitions
-     :reader namespace-definitions
+   (declarations
+     :reader namespace-declarations
      :initform nil)))
 
 ;; -----------------------------------------------------------------------------
-(defclass ir-settings (ir-node)
-  ())
+(defun add-definition (declaration definition)
+   (setf (slot-value declaration 'definitions)
+         (cons definition
+               (slot-value declaration 'definitions))))
 
 ;; -----------------------------------------------------------------------------
-(defclass ir-program (ir-node)
-  ((name
-     :reader program-name
-     :initform "flux-program"
-     :initarg :name)
-   (global-scope
-     :reader global-scope
-     :initform (make-instance 'ir-scope))
-   naming-conventions))
-
-;; -----------------------------------------------------------------------------
-(defun add-implementation (definition implementation)
-   (setf (slot-value definition 'implementations)
-         (cons implementation
-               (slot-value definition 'implementations))))
-
-;; -----------------------------------------------------------------------------
-(defun find-definition (namespace name)
-  (let ((definitions (namespace-definitions namespace)))
-    (if definitions
-      (gethash name definitions)
+(defun find-declaration (namespace name)
+  (let ((declarations (namespace-declarations namespace)))
+    (if declarations
+      (gethash name declarations)
       nil)))
 
 ;; -----------------------------------------------------------------------------
-(defun insert-definition (namespace definition)
-  (let ((definitions (lazy-initialize-slot namespace 'definitions
-                       (make-hash-table))))
-    (setf (gethash (definition-name definition) definitions) definition)))
+(defun find-or-insert-declaration (namespace name)
+  (let* ((declarations (lazy-initialize-slot namespace 'declarations
+                         (make-hash-table)))
+         (declaration (gethash name declarations)))
+    (if (not declaration)
+      (setf declaration
+            (setf (gethash name declarations)
+                  (make-instance 'declaration
+                                 :name name
+                                 :namespace namespace))))
+    declaration))
 
-(deftest test-insert-definition ()
-  (let ((namespace (make-instance 'ir-namespace))
-        (definition (make-instance 'ir-function-definition
-                                   :name 'test-function)))
-    (insert-definition namespace definition)
-    (test-equal definition (find-definition namespace 'test-function))))
+(deftest test-find-or-insert-declaration ()
+  (let* ((namespace (make-instance 'namespace))
+         (declaration1 (find-or-insert-declaration namespace 'test-function))
+         (declaration2 (find-or-insert-declaration namespace 'test-function)))
+    (test-type 'declaration declaration1)
+    (test-type 'declaration declaration2)
+    (test-same declaration1 declaration2)
+    (test-equal declaration1 (find-declaration namespace 'test-function))))
 
 ;; -----------------------------------------------------------------------------
 (defun create-child-namespace (parent-namespace name)
-  (let ((child-namespace (make-instance 'ir-namespace
+  (let ((child-namespace (make-instance 'namespace
                                         :name name
                                         :parent parent-namespace
                                         :scope (namespace-scope parent-namespace))))
@@ -1091,10 +1054,10 @@ to the previous line."
     child-namespace))
 
 (deftest test-create-child-namespace ()
-  (let* ((parent (make-instance 'ir-namespace
+  (let* ((parent (make-instance 'namespace
                                 :name 'outer))
          (child (create-child-namespace parent 'inner)))
-    (test-type 'ir-namespace child)
+    (test-type 'namespace child)
     (test-equal 'inner (namespace-name child))
     (test-sequence-equal (list child) (namespace-children parent))))
 
@@ -1124,14 +1087,14 @@ to the previous line."
             (t nil)))))))
 
 (deftest test-find-nested-child-namespace-returns-nil ()
-  (let ((parent (make-instance 'ir-namespace
+  (let ((parent (make-instance 'namespace
                                :name 'outer)))
     (test-equal nil (find-nested-child-namespace parent
                                                  (make-instance 'ast-identifier
                                                                 :name 'inner)))))
 
 (deftest test-find-nested-child-namespace-create-if-does-not-exist ()
-  (let* ((parent (make-instance 'ir-namespace
+  (let* ((parent (make-instance 'namespace
                                 :name 'outermost))
          (child (find-nested-child-namespace parent
                                              (make-instance 'ast-identifier
@@ -1139,45 +1102,45 @@ to the previous line."
                                                             :qualifier (make-instance 'ast-identifier
                                                                                       :name 'inner))
                                              :if-does-not-exist :create)))
-    (test-type 'ir-namespace child)
+    (test-type 'namespace child)
     (test-equal 'innermost (namespace-name child))
     (test-equal 'inner (namespace-name (namespace-parent child)))
     (test-equal 'outermost (namespace-name (namespace-parent (namespace-parent child))))))
 
 ;; -----------------------------------------------------------------------------
-(defun get-namespace-for-definitions (scope definition-kind)
+(defun get-namespace-for-declarations (scope declaration-kind)
   (macrolet
     ((lazy-initialize (slot-name)
        `(lazy-initialize-slot scope ,slot-name
-                             (make-instance 'ir-namespace
+                             (make-instance 'namespace
                                              :scope scope))))
   (cond
-    ((eq definition-kind 'functions)
+    ((eq declaration-kind 'functions)
      (lazy-initialize 'functions))
-    ((eq definition-kind 'variables)
+    ((eq declaration-kind 'variables)
      (lazy-initialize 'variables))
-    ((eq definition-kind 'modules)
+    ((eq declaration-kind 'modules)
      (lazy-initialize 'modules))
-    ((eq definition-kind 'types)
+    ((eq declaration-kind 'types)
      (lazy-initialize 'types))
     (t
-     (error (format nil "Unknown definition kind '~a'" definition-kind))))))
+     (error (format nil "Unknown declaration kind '~a'" declaration-kind))))))
 
-(deftest test-get-namespace-for-definitions ()
-  (let ((scope (make-instance 'ir-scope)))
-    (test-type 'ir-namespace (get-namespace-for-definitions scope 'functions))
-    (test-type 'ir-namespace (get-namespace-for-definitions scope 'variables))
-    (test-type 'ir-namespace (get-namespace-for-definitions scope 'modules))
-    (test-type 'ir-namespace (get-namespace-for-definitions scope 'types))))
+(deftest test-get-namespace-for-declarations ()
+  (let ((scope (make-instance 'scope)))
+    (test-type 'namespace (get-namespace-for-declarations scope 'functions))
+    (test-type 'namespace (get-namespace-for-declarations scope 'variables))
+    (test-type 'namespace (get-namespace-for-declarations scope 'modules))
+    (test-type 'namespace (get-namespace-for-declarations scope 'types))))
 
 ;; -----------------------------------------------------------------------------
-(defun lookup-namespace (scope definition-kind identifier &key if-does-not-exist)
-  (find-nested-child-namespace (get-namespace-for-definitions scope definition-kind)
+(defun lookup-namespace (scope declaration-kind identifier &key if-does-not-exist)
+  (find-nested-child-namespace (get-namespace-for-definitions scope declaration-kind)
                                identifier
                                :if-does-not-exist if-does-not-exist))
 
 (deftest test-lookup-namespace-simple ()
-  (let* ((scope (make-instance 'ir-scope))
+  (let* ((scope (make-instance 'scope))
          (namespace (lookup-namespace scope
                                       'functions
                                       (make-instance 'ast-identifier
@@ -1185,52 +1148,39 @@ to the previous line."
                                                      :qualifier (make-instance 'ast-identifier
                                                                                :name 'outer))
                                       :if-does-not-exist :create)))
-    (test-type 'ir-namespace namespace)
+    (test-type 'namespace namespace)
     (test-equal 'inner (namespace-name namespace))
     (test-equal (get-namespace-for-definitions scope 'functions)
                 (namespace-parent (namespace-parent namespace)))))
 
 ;; -----------------------------------------------------------------------------
-(defun find-or-create-definition (scope definition-kind identifier)
-  (let* ((top-namespace (get-namespace-for-definitions scope definition-kind))
+(defun find-or-create-declaration (scope declaration-kind identifier)
+  (let* ((top-namespace (get-namespace-for-declarations scope declaration-kind))
          (qualifier (ast-id-qualifier identifier))
          (name (ast-id-name identifier))
          (namespace (if qualifier
-                      (find-or-create-child-namespace top-namespace qualifier :if-does-not-exist :create)
-                      top-namespace))
-         (definition (find-definition namespace name)))
-    (if (not definition)
-      (insert-definition namespace
-                         (setf definition
-                               (make-instance
-                                 (cond ((eq definition-kind 'functions)
-                                        'ir-function-definition)
-                                       ((eq definition-kind 'modules)
-                                        'ir-module-definition)
-                                       (t
-                                        (error (format nil "Unrecognized definition kind '~a'" definition-kind))))
-                                 :namespace namespace
-                                 :name name))))
-    definition))
+                      (find-nested-child-namespace top-namespace qualifier :if-does-not-exist :create)
+                      top-namespace)))
+    (find-or-insert-declaration namespace name)))
 
-(deftest test-find-or-create-definition-function ()
-  (let* ((scope (make-instance 'ir-scope))
-         (definition (find-or-create-definition scope
+(deftest test-find-or-create-declaration ()
+  (let* ((scope (make-instance 'scope))
+         (declaration (find-or-create-declaration scope
                                                 'functions
                                                 (make-instance 'ast-identifier
                                                                :name 'my-function))))
-    (test-type 'ir-function-definition definition)
-    (test-equal 'my-function (definition-name definition))))
+    (test-type 'declaration declaration)
+    (test-equal 'my-function (declaration-name declaration))))
 
 ;; -----------------------------------------------------------------------------
-(defsuite test-ir ()
-  (test-insert-definition)
+(defsuite test-symbol-table ()
+  (test-find-or-insert-declaration)
   (test-create-child-namespace)
   (test-find-nested-child-namespace-returns-nil)
   (test-find-nested-child-namespace-create-if-does-not-exist)
-  (test-get-namespace-for-definitions)
+  (test-get-namespace-for-declarations)
   (test-lookup-namespace-simple)
-  (test-find-or-create-definition-function))
+  (test-find-or-create-declaration))
 
 ;;;;============================================================================
 ;;;;    Naming Conventions.
@@ -1252,7 +1202,7 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-;; A name manger takes
+;; A name mangler takes
 (defclass name-mangler ()
   ())
 
@@ -1484,17 +1434,12 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defun create-implementation-for-ast (definition-kind implementation-type ast parser-state &rest initialize-args)
-  (let ((definition (find-or-create-definition
-                      (current-scope parser-state)
-                      definition-kind
+(defun insert-declaration-into-symbol-table (declaration-kind ast parser-state &key (scope-index 0))
+  (let ((declaration (find-or-create-declaration
+                      (current-scope parser-state :index scope-index)
+                      declaration-kind
                       (ast-definition-name ast))))
-    (add-implementation definition
-                        (apply #'make-instance
-                               implementation-type
-                               :definition definition
-                               :ast ast
-                               initialize-args))))
+    (add-definition declaration ast)))
   
 ;; -----------------------------------------------------------------------------
 ;; The default parse action is to just create an AST node whose type corresponds
@@ -1507,22 +1452,14 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-function-definition)) region state &rest rest)
   (let* ((ast (call-next-method)))
-    (create-implementation-for-ast 'functions
-                                   'ir-function-implementation
-                                   ast
-                                   state
-                                   :scope (current-scope state))
+    (insert-declaration-into-symbol-table 'functions ast state)
     ast))
  
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-module-definition)) region state &rest rest)
   (let ((ast (call-next-method)))
-    (create-implementation-for-ast 'modules
-                                   'ir-module-implementation
-                                   ast
-                                   state
-                                   :scope (current-scope state))
-    (ast)))
+    (insert-declaration-into-symbol-table 'modules ast state)
+    ast))
 
 ;;;;============================================================================
 ;;;;    Parsers.
@@ -1631,12 +1568,8 @@ to the previous line."
      :reader package-for-symbols
      :initarg :package-for-symbols
      :initform *flux-default-package*)
-   (program
-     :reader current-program
-     :initarg :program
-     :initform (make-instance 'ir-program))
    (scope-stack
-     :initform (make-array 10 :adjustable t :fill-pointer 0 :element-type 'ir-scope))))
+     :initform (make-array 10 :adjustable t :fill-pointer 0 :element-type 'scope))))
 
 (defmethod initialize-instance :after ((instance parser-state) &key)
 
@@ -1649,19 +1582,28 @@ to the previous line."
         (setf (slot-value instance 'package-for-symbols) symbol-package))))
   
   ;; Set current scope to global scope.
-  (push-scope instance
-              :scope (global-scope (current-program instance))))
+  (push-scope instance (make-instance 'scope)))
 
 ;; -----------------------------------------------------------------------------
-(defun current-scope (state)
-  (let ((scope-stack (slot-value state 'scope-stack)))
-    (elt scope-stack (1- (length scope-stack)))))
+(defun current-scope (state &key (index 0))
+  (let* ((scope-stack (slot-value state 'scope-stack))
+         (scope-index (- (1- (length scope-stack)) index)))
+    (assert (>= scope-index 0))
+    (elt scope-stack scope-index)))
+
+(deftest test-current-scope ()
+  (let* ((state (make-instance 'parser-state))
+         (global-scope (current-scope state))
+         (local-scope (make-instance 'scope)))
+    (push-scope state local-scope)
+    (test-same local-scope (current-scope state))
+    (test-same global-scope (current-scope state :index 1))))
 
 ;; -----------------------------------------------------------------------------
-(defun push-scope (state &key scope)
+(defun push-scope (state &optional scope)
   (let ((scope-stack (slot-value state 'scope-stack)))
     (if (not scope)
-      (setf scope (make-instance 'ir-scope)))
+      (setf scope (make-instance 'scope)))
     (vector-push-extend scope scope-stack)
     scope))
 
@@ -2295,8 +2237,9 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-definition-list (scanner state)
   (push-scope state)
-  (let ((ast (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\})))
-    (pop-scope state)
+  (let ((ast (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\}))
+        (scope (pop-scope state)))
+    (setf (slot-value ast 'local-scope) scope)
     ast))
 
 ;; -----------------------------------------------------------------------------
@@ -2338,6 +2281,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-parsers ()
+  (test-current-scope)
   (test-parse-whitespace)
   (test-parse-list)
   (test-parse-modifier)
@@ -2365,7 +2309,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass emitter-state ()
-  ((blocks
+  ((block-stack
     :reader emitter-blocks
     :initform (progn
                 (let ((array (make-array 10 :adjustable t :fill-pointer t :element-type 'emitter-block)))
@@ -2384,8 +2328,8 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun current-emitter-block (state)
-  (let ((blocks (slot-value state 'blocks)))
-    (elt blocks (1- (length blocks)))))
+  (let ((block-stack (slot-value state 'block-stack)))
+    (elt block-stack (1- (length block-stack)))))
 
 (deftest test-current-emitter-block ()
   (test (current-emitter-block (make-instance 'emitter-state))))
@@ -2413,14 +2357,14 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun push-emitter-block (state &key name)
   (let ((block (make-instance 'emitter-block)))
-    (vector-push-extend block (slot-value state 'blocks))
+    (vector-push-extend block (slot-value state 'block-stack))
     (if name
         (set-current-block-name state name))
     block))
 
 ;; -----------------------------------------------------------------------------
 (defun pop-emitter-block (state)
-  (vector-pop (slot-value state 'blocks)))
+  (vector-pop (slot-value state 'block-stack)))
 
 ;; -----------------------------------------------------------------------------
 (defun append-code-to-current-emitter-block (state list)
@@ -2609,6 +2553,10 @@ to the previous line."
 
 (defsuite test-emit-compilation-unit ()
   (test-emit-compilation-unit-prologue))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ir ir-program) state)
+  ())
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-emitters ()
