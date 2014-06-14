@@ -43,7 +43,7 @@ statement ->
 
 expression ->
 	  "(" expression ")"
-	| identifier type_arguments value_arguments
+	| ( identifier | "resend" ) type_arguments? value_arguments?
 	| expression "." identifier
 	| expression binary_operator expression
 	| unary_prefix_operator expression
@@ -134,6 +134,8 @@ clause ->
     | "requires" expression
 	| "ensures" expression
 	| "invariant" expression
+	| "import" identifier ( "as" identifier )?
+	| "undefine" identifier
 
 attributes ->
 	  ( "[" attribute* "]" )*

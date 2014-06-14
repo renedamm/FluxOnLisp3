@@ -991,11 +991,15 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-function-implementation (ir-implementation)
-  ())
+  ((inner-scope
+     :reader function-scope
+     :initarg :scope)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-module-implementation (ir-implementation)
-  ())
+  ((inner-scope
+     :reader module-scope
+     :initarg :scope)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-scope (ir-node)
@@ -1048,6 +1052,12 @@ to the previous line."
      :reader global-scope
      :initform (make-instance 'ir-scope))
    naming-conventions))
+
+;; -----------------------------------------------------------------------------
+(defun add-implementation (definition implementation)
+   (setf (slot-value definition 'implementations)
+         (cons implementation
+               (slot-value definition 'implementations))))
 
 ;; -----------------------------------------------------------------------------
 (defun find-definition (namespace name)
@@ -1473,8 +1483,19 @@ to the previous line."
 ;;;;    Parser Actions
 ;;;;============================================================================
 
-;; The translation logic runs from within the parser .
-
+;; -----------------------------------------------------------------------------
+(defun create-implementation-for-ast (definition-kind implementation-type ast parser-state &rest initialize-args)
+  (let ((definition (find-or-create-definition
+                      (current-scope parser-state)
+                      definition-kind
+                      (ast-definition-name ast))))
+    (add-implementation definition
+                        (apply #'make-instance
+                               implementation-type
+                               :definition definition
+                               :ast ast
+                               initialize-args))))
+  
 ;; -----------------------------------------------------------------------------
 ;; The default parse action is to just create an AST node whose type corresponds
 ;; to the name of the production and which is initialized from the given arguments.
@@ -1485,17 +1506,23 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-function-definition)) region state &rest rest)
-  (let ((ast (call-next-method)))
-    (find-or-create-definition
-      (current-scope state)
-      'functions
-      (ast-definition-name ast))
+  (let* ((ast (call-next-method)))
+    (create-implementation-for-ast 'functions
+                                   'ir-function-implementation
+                                   ast
+                                   state
+                                   :scope (current-scope state))
     ast))
  
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-module-definition)) region state &rest rest)
   (let ((ast (call-next-method)))
-    ()))
+    (create-implementation-for-ast 'modules
+                                   'ir-module-implementation
+                                   ast
+                                   state
+                                   :scope (current-scope state))
+    (ast)))
 
 ;;;;============================================================================
 ;;;;    Parsers.
@@ -1608,10 +1635,9 @@ to the previous line."
      :reader current-program
      :initarg :program
      :initform (make-instance 'ir-program))
-   (current-scope
-     :reader current-scope)))
+   (scope-stack
+     :initform (make-array 10 :adjustable t :fill-pointer 0 :element-type 'ir-scope))))
 
-;; -----------------------------------------------------------------------------
 (defmethod initialize-instance :after ((instance parser-state) &key)
 
   ;; Make sure that package-for-symbols is an existing package.
@@ -1622,9 +1648,27 @@ to the previous line."
         (setf symbol-package (defpackage symbol-package-name (:use :common-lisp)))
         (setf (slot-value instance 'package-for-symbols) symbol-package))))
   
-  ;; Set current scope.
-  (setf (slot-value instance 'current-scope)
-        (global-scope (current-program instance))))
+  ;; Set current scope to global scope.
+  (push-scope instance
+              :scope (global-scope (current-program instance))))
+
+;; -----------------------------------------------------------------------------
+(defun current-scope (state)
+  (let ((scope-stack (slot-value state 'scope-stack)))
+    (elt scope-stack (1- (length scope-stack)))))
+
+;; -----------------------------------------------------------------------------
+(defun push-scope (state &key scope)
+  (let ((scope-stack (slot-value state 'scope-stack)))
+    (if (not scope)
+      (setf scope (make-instance 'ir-scope)))
+    (vector-push-extend scope scope-stack)
+    scope))
+
+;; -----------------------------------------------------------------------------
+(defun pop-scope (state)
+  (let ((scope-stack (slot-value state 'scope-stack)))
+    (vector-pop scope-stack)))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
@@ -2202,6 +2246,7 @@ to the previous line."
                (not-implemented "parse error; expecting semicolon")))
           (t
            (setf body
+                 ;;////FIXME: this should be unified into one single parsing path for both module and other definitions
                  (if (eq 'ast-module-definition definition-class)
                      (parse-definition-list scanner state)
                      (parse-statement-list scanner state)))))
@@ -2227,16 +2272,32 @@ to the previous line."
                :is-match-p t :expected-type 'ast-type-definition
                :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast))))))
 
+(deftest test-parse-definition-simple-function ()
+  (test-parser parse-definition "function Foobar : () -> () {}"
+               :is-match-p t
+               :expected-type 'ast-function-definition
+               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast))))))
+
+(deftest test-parse-definition-simple-module ()
+  (test-parser parse-definition "module Foobar {}"
+               :is-match-p t
+               :expected-type 'ast-module-definition
+               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast))))))
+
 (deftest test-parse-definition-rejects-non-definition ()
   (test-parser parse-definition "Foobar" :is-match-p nil))
 
 (deftest test-parse-definition ()
   (test-parse-definition-simple-type)
+  (test-parse-definition-simple-function)
   (test-parse-definition-rejects-non-definition))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-definition-list (scanner state)
-  (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\}))
+  (push-scope state)
+  (let ((ast (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\})))
+    (pop-scope state)
+    ast))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-compilation-unit (scanner state)
