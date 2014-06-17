@@ -76,7 +76,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-same (expected actual)
-  (test-equal expected actual :equal eq))
+  `(test-equal ,expected ,actual :equal eq))
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-sequence-equal (expected actual)
@@ -673,6 +673,11 @@ to the previous line."
     :reader ast-id-name
     :initarg :name)))
 
+(defmethod initialize-instance :after ((id ast-identifier) &key)
+  (let ((name (ast-id-name id)))
+    (if (not (symbolp name))
+      (error (format nil "Expecting symbol for name of identifier but got '~a' instead." name)))))
+
 ;; -----------------------------------------------------------------------------
 (defclass ast-modifier (ast-node)
   ())
@@ -898,9 +903,10 @@ to the previous line."
 (defclass ast-compilation-unit (ast-node)
   ((definitions
      :reader ast-unit-definitions
-     :initarg :definitions)
-   (global-scope
-     :reader ast-unit-global-scope)))
+     :initarg :definitions)))
+
+;; -----------------------------------------------------------------------------
+(defparameter *global-qualifier* '|::|)
 
 ;; -----------------------------------------------------------------------------
 (defun make-ast-error (diagnostic)
@@ -909,10 +915,35 @@ to the previous line."
                  :diagnostic diagnostic))
 
 ;; -----------------------------------------------------------------------------
-(defmethod initialize-instance :after ((id ast-identifier) &key)
-  (let ((name (ast-id-name id)))
-    (if (not (symbolp name))
-      (error (format nil "Expecting symbol for name of identifier but got '~a' instead." name)))))
+(defun make-identifier (&rest names)
+  (assert (>= (length names) 1))
+  (cond
+    ((eq (car names) *global-qualifier*)
+     (let ((id (apply #'make-identifier (cdr names))))
+       (setf (slot-value id 'qualifier) (make-instance 'ast-global-qualifier))
+       id))
+    ((cdr names)
+     (let ((id (apply #'make-identifier (cdr names))))
+       (setf (slot-value id 'qualifier) (make-instance 'ast-identifier :name (car names)))
+       id))
+    (t
+     (make-instance 'ast-identifier :name (car names)))))
+
+(deftest test-make-identifier-simple ()
+  (let ((id (make-identifier 'test)))
+    (test-equal "TEST" (symbol-name (ast-id-name id)))
+    (test-equal nil (ast-id-qualifier id))))
+
+(deftest test-make-identifier-with-global-qualifier ()
+  (let ((id (make-identifier *global-qualifier* 'test)))
+    (test-equal "TEST" (symbol-name (ast-id-name id)))
+    (test-type 'ast-global-qualifier (ast-id-qualifier id))))
+
+(deftest test-make-identifier-with-namespace ()
+  (let ((id (make-identifier 'outer 'inner)))
+    (test-equal "INNER" (symbol-name (ast-id-name id)))
+    (test-type 'ast-identifier (ast-id-qualifier id))
+    (test-equal "OUTER" (symbol-name (ast-id-name (ast-id-qualifier id))))))
 
 ;; -----------------------------------------------------------------------------
 (defun identifier-to-string (id)
@@ -956,6 +987,9 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-asts ()
+  (test-make-identifier-simple)
+  (test-make-identifier-with-global-qualifier)
+  (test-make-identifier-with-namespace)
   (test-identifier-to-string)
   (test-definition-has-modifier-p))
 
@@ -1006,6 +1040,37 @@ to the previous line."
    (declarations
      :reader namespace-declarations
      :initform nil)))
+
+;; -----------------------------------------------------------------------------
+(defun make-scope-stack ()
+  (make-array 10 :element-type 'scope :adjustable t :fill-pointer t))
+
+;; -----------------------------------------------------------------------------
+(defun push-scope (scope-stack &optional scope)
+  (if (not scope)
+    (setf scope (make-instance 'scope)))
+  (vector-push-extend scope scope-stack)
+  scope)
+
+;; -----------------------------------------------------------------------------
+(defun pop-scope (scope-stack)
+  (assert (>= (length scope-stack) 1))
+  (vector-pop scope-stack))
+
+;; -----------------------------------------------------------------------------
+(defun current-scope (scope-stack &key (index 0))
+  (let* ((scope-index (- (1- (length scope-stack)) index)))
+    (assert (>= scope-index 0))
+    (elt scope-stack scope-index)))
+
+(deftest test-current-scope ()
+  (let* ((stack (make-scope-stack))
+         (global-scope (make-instance 'scope))
+         (local-scope (make-instance 'scope)))
+    (push-scope stack global-scope)
+    (push-scope stack local-scope)
+    (test-same local-scope (current-scope stack))
+    (test-same global-scope (current-scope stack :index 1))))
 
 ;; -----------------------------------------------------------------------------
 (defun add-definition (declaration definition)
@@ -1135,7 +1200,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun lookup-namespace (scope declaration-kind identifier &key if-does-not-exist)
-  (find-nested-child-namespace (get-namespace-for-definitions scope declaration-kind)
+  (find-nested-child-namespace (get-namespace-for-declarations scope declaration-kind)
                                identifier
                                :if-does-not-exist if-does-not-exist))
 
@@ -1150,7 +1215,7 @@ to the previous line."
                                       :if-does-not-exist :create)))
     (test-type 'namespace namespace)
     (test-equal 'inner (namespace-name namespace))
-    (test-equal (get-namespace-for-definitions scope 'functions)
+    (test-equal (get-namespace-for-declarations scope 'functions)
                 (namespace-parent (namespace-parent namespace)))))
 
 ;; -----------------------------------------------------------------------------
@@ -1165,12 +1230,52 @@ to the previous line."
 
 (deftest test-find-or-create-declaration ()
   (let* ((scope (make-instance 'scope))
-         (declaration (find-or-create-declaration scope
-                                                'functions
-                                                (make-instance 'ast-identifier
-                                                               :name 'my-function))))
+         (declaration (find-or-create-declaration scope 'functions (make-identifier 'my-function))))
     (test-type 'declaration declaration)
     (test-equal 'my-function (declaration-name declaration))))
+
+;; -----------------------------------------------------------------------------
+(defun lookup-declaration (scope-stack declaration-kind identifier &key current-namespace)
+  (let* ((qualifier (ast-id-qualifier identifier))
+         (name (ast-id-name identifier))
+         (is-globally-qualified (typep qualifier 'ast-global-qualifier)))
+
+    (if is-globally-qualified
+      (setf qualifier (ast-id-qualifier qualifier)))
+
+    (flet ((lookup-in-scope (scope)
+             (let* ((starting-namespace
+                      (cond
+                        (is-globally-qualified
+                          (get-namespace-for-declarations scope declaration-kind))
+                        ((and current-namespace
+                              (eq (namespace-scope current-namespace) scope))
+                         current-namespace)
+                        (current-namespace
+                          (not-implemented "finding corresponding namespace in different scope"))
+                        (t
+                          (get-namespace-for-declarations scope declaration-kind))))
+                    (target-namespace
+                      (cond
+                        (qualifier
+                          (find-nested-child-namespace starting-namespace qualifier))
+                        (t
+                          starting-namespace))))
+               (if target-namespace
+                 (find-declaration target-namespace name)))))
+
+    (dotimes (scope-index (length scope-stack))
+      (let* ((current-scope (current-scope scope-stack :index scope-index))
+             (declaration (lookup-in-scope current-scope)))
+        (if declaration
+          (return declaration)))))))
+
+(deftest test-lookup-declaration-in-current-scope ()
+  (let* ((id (make-identifier 'my-function))
+         (scope-stack (make-scope-stack))
+         (scope (push-scope scope-stack))
+         (declaration (find-or-create-declaration scope 'functions id)))
+    (test-same declaration (lookup-declaration scope-stack 'functions id))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-symbol-table ()
@@ -1180,7 +1285,8 @@ to the previous line."
   (test-find-nested-child-namespace-create-if-does-not-exist)
   (test-get-namespace-for-declarations)
   (test-lookup-namespace-simple)
-  (test-find-or-create-declaration))
+  (test-find-or-create-declaration)
+  (test-lookup-declaration-in-current-scope))
 
 ;;;;============================================================================
 ;;;;    Naming Conventions.
@@ -1354,8 +1460,8 @@ to the previous line."
     (t nil)))
 
 (deftest test-string-scanner-match-if ()
-  (test (scanner-match-if (make-string-scanner "foo" ) (lambda (char) t)))
-  (test (not (scanner-match-if (make-string-scanner "foo") (lambda (char) nil)))))
+  (test (scanner-match-if (make-string-scanner "foo" ) (lambda (char) (declare (ignore char)) t)))
+  (test (not (scanner-match-if (make-string-scanner "foo") (lambda (char) (declare (ignore char)) nil)))))
 
 ;; -----------------------------------------------------------------------------
 (defun scanner-match-sequence (scanner token-list)
@@ -1436,7 +1542,7 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun insert-declaration-into-symbol-table (declaration-kind ast parser-state &key (scope-index 0))
   (let ((declaration (find-or-create-declaration
-                      (current-scope parser-state :index scope-index)
+                      (current-scope (scope-stack parser-state) :index scope-index)
                       declaration-kind
                       (ast-definition-name ast))))
     (add-definition declaration ast)))
@@ -1445,18 +1551,21 @@ to the previous line."
 ;; The default parse action is to just create an AST node whose type corresponds
 ;; to the name of the production and which is initialized from the given arguments.
 (defmethod parse-action ((production symbol) region state &rest rest)
+  (declare (ignore state))
   (apply 'make-instance (nconc (list production
                                      :source-region region)
                                rest)))
 
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-function-definition)) region state &rest rest)
+  (declare (ignore rest region))
   (let* ((ast (call-next-method)))
     (insert-declaration-into-symbol-table 'functions ast state)
     ast))
  
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-module-definition)) region state &rest rest)
+  (declare (ignore rest region))
   (let ((ast (call-next-method)))
     (insert-declaration-into-symbol-table 'modules ast state)
     ast))
@@ -1569,7 +1678,8 @@ to the previous line."
      :initarg :package-for-symbols
      :initform *flux-default-package*)
    (scope-stack
-     :initform (make-array 10 :adjustable t :fill-pointer 0 :element-type 'scope))))
+     :reader scope-stack
+     :initform (make-scope-stack))))
 
 (defmethod initialize-instance :after ((instance parser-state) &key)
 
@@ -1582,35 +1692,7 @@ to the previous line."
         (setf (slot-value instance 'package-for-symbols) symbol-package))))
   
   ;; Set current scope to global scope.
-  (push-scope instance (make-instance 'scope)))
-
-;; -----------------------------------------------------------------------------
-(defun current-scope (state &key (index 0))
-  (let* ((scope-stack (slot-value state 'scope-stack))
-         (scope-index (- (1- (length scope-stack)) index)))
-    (assert (>= scope-index 0))
-    (elt scope-stack scope-index)))
-
-(deftest test-current-scope ()
-  (let* ((state (make-instance 'parser-state))
-         (global-scope (current-scope state))
-         (local-scope (make-instance 'scope)))
-    (push-scope state local-scope)
-    (test-same local-scope (current-scope state))
-    (test-same global-scope (current-scope state :index 1))))
-
-;; -----------------------------------------------------------------------------
-(defun push-scope (state &optional scope)
-  (let ((scope-stack (slot-value state 'scope-stack)))
-    (if (not scope)
-      (setf scope (make-instance 'scope)))
-    (vector-push-extend scope scope-stack)
-    scope))
-
-;; -----------------------------------------------------------------------------
-(defun pop-scope (state)
-  (let ((scope-stack (slot-value state 'scope-stack)))
-    (vector-pop scope-stack)))
+  (push-scope (scope-stack instance)))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-result-match-p (result)
@@ -1724,7 +1806,7 @@ to the previous line."
 (defmacro parse-list (parser-name scanner state &key start-delimiter end-delimiter separator)
   ;; List must either be undelimited or have both a start and end
   ;; delimiter.
-  (with-gensyms (scanner-value state-value list start-position element parse-list-block result)
+  (with-gensyms (scanner-value state-value list start-position element parse-list-block)
     `(block ,parse-list-block
        (let ((,scanner-value ,scanner)
              (,state-value ,state))
@@ -1818,6 +1900,7 @@ to the previous line."
   (labels
       ;; Define a dummy parser that matches "a".
       ((parse-a (scanner state)
+         (declare (ignore state))
          (if (scanner-match scanner #\a)
              (parse-result-match (make-instance 'ast-node
                                                 :source-region (make-source-region
@@ -1939,7 +2022,8 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-attribute (scanner state)
-  (parse-result-no-match))
+  (declare (ignore scanner state))
+  (parse-result-no-match));////TODO
 
 ;; -----------------------------------------------------------------------------
 (defun parse-attribute-list (scanner state)
@@ -2011,7 +2095,8 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter (scanner state)
-  (parse-result-no-match))
+  (declare (ignore scanner state))
+  (parse-result-no-match));////TODO
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter-list (scanner state)
@@ -2020,7 +2105,8 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-value-parameter (scanner state)
-  (parse-result-no-match))
+  (declare (ignore scanner state))
+  (parse-result-no-match));////TODO
 
 ;; -----------------------------------------------------------------------------
 (defun parse-value-parameter-list (scanner state)
@@ -2236,9 +2322,9 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-definition-list (scanner state)
-  (push-scope state)
+  (push-scope (scope-stack state))
   (let ((ast (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\}))
-        (scope (pop-scope state)))
+        (scope (pop-scope (scope-stack state))))
     (setf (slot-value ast 'local-scope) scope)
     ast))
 
@@ -2310,15 +2396,19 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defclass emitter-state ()
   ((block-stack
-    :reader emitter-blocks
-    :initform (progn
-                (let ((array (make-array 10 :adjustable t :fill-pointer t :element-type 'emitter-block)))
-                  (vector-push-extend (make-instance 'emitter-block) array)
-                  array)))
+     :reader emitter-blocks
+     :initform (progn
+                 (let ((array (make-array 10 :adjustable t :fill-pointer t :element-type 'emitter-block)))
+                   (vector-push-extend (make-instance 'emitter-block) array)
+                   array)))
    (package-name
-    :reader emitter-package-name
-    :initarg :package-name
-    :initform :flux-program)
+     :reader emitter-package-name
+     :initarg :package-name
+     :initform :flux-program)
+   (current-scope
+     :accessor current-emitter-scope)
+   (current-namespace
+     :accessor current-emitter-namespace)
    functions
    types))
 
@@ -2413,10 +2503,12 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-nothing-type) state)
+  (declare (ignore state))
   (intern "Nothing"))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-named-type) state)
+  (declare (ignore state))
   (identifier-to-lisp (ast-type-name ast)))
 
 (deftest test-emit-named-type-simple ()
@@ -2431,6 +2523,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-integer-literal) state)
+  (declare (ignore state))
   (ast-literal-value ast))
 
 ;; -----------------------------------------------------------------------------
@@ -2447,7 +2540,7 @@ to the previous line."
     "return 0;"
     #'parse-statement
     (operator name value)
-    ()))
+    (declare (ignore operator name value))));////TODO
 
 (defsuite test-emit-return-statement ()
   (test-emit-return-statement-with-simple-value))
@@ -2476,6 +2569,7 @@ to the previous line."
       "type Foobar;"
       #'parse-definition
       (operator name (superclass) slots)
+    (declare (ignore slots))
     (test-equal 'defclass operator)
     (test-equal "Foobar" (symbol-name name))
     (test-equal *object-class-name* superclass)))
@@ -2485,6 +2579,7 @@ to the previous line."
       "type Foobar : Barfoo;"
       #'parse-definition
       (operator name (superclass) slots)
+    (declare (ignore operator name slots))
     (test-equal "Barfoo" (symbol-name superclass))))
 
 (defsuite test-emit-type-definition ()
@@ -2509,6 +2604,7 @@ to the previous line."
       "method Foobar() {}"
       #'parse-definition
       (operator name () body)
+    (declare (ignore body))
     (test-equal 'defmethod operator)
     (test-equal "Foobar" (symbol-name name))))
 
@@ -2517,6 +2613,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-field-definition) state)
+  (declare (ignore state))
   (not-implemented "emitting fields"))
 
 ;; -----------------------------------------------------------------------------
@@ -2555,10 +2652,6 @@ to the previous line."
   (test-emit-compilation-unit-prologue))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ir ir-program) state)
-  ())
-
-;; -----------------------------------------------------------------------------
 (defsuite test-emitters ()
   (test-current-emitter-block)
   (test-append-code-to-current-emitter-block)
@@ -2593,24 +2686,26 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defmethod verify-no-regression ((regression-spec-type (eql :type)) regression-spec source
                                                                     emitter-state generated-code)
+  (declare (ignore regression-spec source emitter-state generated-code))
   ())
 
 ;; -----------------------------------------------------------------------------
 (defmethod verify-no-regression ((regression-spec-type (eql :function)) regression-spec source
                                                                         emitter-state generated-code)
+  (declare (ignore regression-spec source emitter-state generated-code))
   ())
 
 ;; -----------------------------------------------------------------------------
 (defmethod verify-no-regression ((regression-spec-type (eql :call)) regression-spec source
                                                                     emitter-state generated-code)
+  (declare (ignore source emitter-state generated-code))
   (let ((function (get-regression-spec-argument regression-spec :function))
         (result (get-regression-spec-argument regression-spec :result)))
     (test-equal result (funcall (intern function)))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-spec-ignored-text (scanner state)
-  (let ((saved-position (scanner-position scanner))
-        char)
+  (let ((saved-position (scanner-position scanner)))
     (loop
        (if (or (scanner-at-end-p scanner)
                (scanner-match-sequence scanner "/*#"))
@@ -2633,6 +2728,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-spec-key (scanner state)
+  (declare (ignore state))
   (let ((string (make-array 10 :adjustable t :fill-pointer 0 :element-type 'character)))
     (loop
        (if (or (scanner-at-end-p scanner)
@@ -2649,6 +2745,7 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defun parse-spec-value (scanner state)
+  (declare (ignore state))
   (let ((string (make-array 10 :adjustable t :fill-pointer 0 :element-type 'character)))
     (loop
        (if (or (scanner-at-end-p scanner)
@@ -2745,7 +2842,6 @@ to the previous line."
                                               (make-instance 'parser-state))))
                         (emitter-state (make-instance 'emitter-state
                                                       :package-name test-package-name))
-                        ast
                         code)
                    (parse source :package-for-symbols test-package-name)
                    (setf code (emit (source-ast source) emitter-state))
