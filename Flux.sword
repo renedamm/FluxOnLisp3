@@ -126,6 +126,7 @@ modifier ->
 	| "read"
 	| "write"
 	| "private"
+	| "protected"
 	| "using"
 	| "external"
 

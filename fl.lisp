@@ -998,6 +998,12 @@ to the previous line."
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
+(defparameter *declaration-kind-function* 'functions)
+(defparameter *declaration-kind-variable* 'variables)
+(defparameter *declaration-kind-module* 'modules)
+(defparameter *declaration-kind-type* 'types)
+
+;; -----------------------------------------------------------------------------
 (defclass declaration ()
   ((namespace
      :reader declaration-namespace
@@ -1042,8 +1048,49 @@ to the previous line."
      :initform nil)))
 
 ;; -----------------------------------------------------------------------------
+(defparameter *namespace-separator* "::")
+
+;; -----------------------------------------------------------------------------
+(defun namespace-qualified-name (namespace)
+  (let ((parent (namespace-parent namespace)))
+    (cond
+      ((not parent)
+       "")
+      
+      ((not (namespace-parent parent))
+       (symbol-name (namespace-name namespace)))
+      
+      (t
+       (concatenate 'string
+                    (namespace-qualified-name parent)
+                    *namespace-separator*
+                    (symbol-name (namespace-name namespace)))))))
+
+(deftest test-namespace-qualified-name ()
+  (let* ((global (make-instance 'namespace))
+         (outer (make-instance 'namespace :name 'outer :parent global))
+         (inner (make-instance 'namespace :name 'inner :parent outer)))
+    (test-equal "" (namespace-qualified-name global))
+    (test-equal "OUTER" (namespace-qualified-name outer))
+    (test-equal "OUTER::INNER" (namespace-qualified-name inner))))
+
+;; -----------------------------------------------------------------------------
+(defun declaration-qualified-name (declaration)
+  (let ((namespace (namespace-qualified-name (declaration-namespace declaration)))
+        (name (symbol-name (declaration-name declaration))))
+    (if (zerop (length namespace))
+      name
+      (concatenate 'string namespace *namespace-separator* name))))
+
+(deftest test-declaration-qualified-name ()
+  (let* ((global (make-instance 'namespace))
+         (namespace (make-instance 'namespace :name 'namespace :parent global))
+         (declaration (make-instance 'declaration :name 'test :namespace namespace)))
+    (test-equal "NAMESPACE::TEST" (declaration-qualified-name declaration))))
+
+;; -----------------------------------------------------------------------------
 (defun make-scope-stack ()
-  (make-array 10 :element-type 'scope :adjustable t :fill-pointer t))
+  (make-array 10 :element-type 'scope :adjustable t :fill-pointer 0))
 
 ;; -----------------------------------------------------------------------------
 (defun push-scope (scope-stack &optional scope)
@@ -1180,23 +1227,23 @@ to the previous line."
                              (make-instance 'namespace
                                              :scope scope))))
   (cond
-    ((eq declaration-kind 'functions)
+    ((eq declaration-kind *declaration-kind-function*)
      (lazy-initialize 'functions))
-    ((eq declaration-kind 'variables)
+    ((eq declaration-kind *declaration-kind-variable*)
      (lazy-initialize 'variables))
-    ((eq declaration-kind 'modules)
+    ((eq declaration-kind *declaration-kind-module*)
      (lazy-initialize 'modules))
-    ((eq declaration-kind 'types)
+    ((eq declaration-kind *declaration-kind-type*)
      (lazy-initialize 'types))
     (t
      (error (format nil "Unknown declaration kind '~a'" declaration-kind))))))
 
 (deftest test-get-namespace-for-declarations ()
   (let ((scope (make-instance 'scope)))
-    (test-type 'namespace (get-namespace-for-declarations scope 'functions))
-    (test-type 'namespace (get-namespace-for-declarations scope 'variables))
-    (test-type 'namespace (get-namespace-for-declarations scope 'modules))
-    (test-type 'namespace (get-namespace-for-declarations scope 'types))))
+    (test-type 'namespace (get-namespace-for-declarations scope *declaration-kind-function*))
+    (test-type 'namespace (get-namespace-for-declarations scope *declaration-kind-variable*))
+    (test-type 'namespace (get-namespace-for-declarations scope *declaration-kind-module*))
+    (test-type 'namespace (get-namespace-for-declarations scope *declaration-kind-type*))))
 
 ;; -----------------------------------------------------------------------------
 (defun lookup-namespace (scope declaration-kind identifier &key if-does-not-exist)
@@ -1207,7 +1254,7 @@ to the previous line."
 (deftest test-lookup-namespace-simple ()
   (let* ((scope (make-instance 'scope))
          (namespace (lookup-namespace scope
-                                      'functions
+                                      *declaration-kind-function*
                                       (make-instance 'ast-identifier
                                                      :name 'inner
                                                      :qualifier (make-instance 'ast-identifier
@@ -1215,7 +1262,7 @@ to the previous line."
                                       :if-does-not-exist :create)))
     (test-type 'namespace namespace)
     (test-equal 'inner (namespace-name namespace))
-    (test-equal (get-namespace-for-declarations scope 'functions)
+    (test-equal (get-namespace-for-declarations scope *declaration-kind-function*)
                 (namespace-parent (namespace-parent namespace)))))
 
 ;; -----------------------------------------------------------------------------
@@ -1230,7 +1277,7 @@ to the previous line."
 
 (deftest test-find-or-create-declaration ()
   (let* ((scope (make-instance 'scope))
-         (declaration (find-or-create-declaration scope 'functions (make-identifier 'my-function))))
+         (declaration (find-or-create-declaration scope *declaration-kind-function* (make-identifier 'my-function))))
     (test-type 'declaration declaration)
     (test-equal 'my-function (declaration-name declaration))))
 
@@ -1274,11 +1321,13 @@ to the previous line."
   (let* ((id (make-identifier 'my-function))
          (scope-stack (make-scope-stack))
          (scope (push-scope scope-stack))
-         (declaration (find-or-create-declaration scope 'functions id)))
-    (test-same declaration (lookup-declaration scope-stack 'functions id))))
+         (declaration (find-or-create-declaration scope *declaration-kind-function* id)))
+    (test-same declaration (lookup-declaration scope-stack *declaration-kind-function* id))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-symbol-table ()
+  (test-namespace-qualified-name)
+  (test-declaration-qualified-name)
   (test-find-or-insert-declaration)
   (test-create-child-namespace)
   (test-find-nested-child-namespace-returns-nil)
@@ -1307,10 +1356,25 @@ to the previous line."
 ;;;;    Name Mangling.
 ;;;;============================================================================
 
+;; Once we have resolved a name to the declaration it refers to, we need to
+;; emit a Lisp identifier that uniquely refers to that declaration.
+
 ;; -----------------------------------------------------------------------------
-;; A name mangler takes
-(defclass name-mangler ()
-  ())
+(defun mangled-name (declaration &key in-package)
+  (let ((qualified-name (declaration-qualified-name declaration)))
+    (if in-package
+      (intern qualified-name in-package)
+      (intern qualified-name))))
+
+(deftest test-mangled-name-simple ()
+  (let* ((scope (make-instance 'scope))
+         (namespace (get-namespace-for-declarations scope *declaration-kind-function*))
+         (declaration (find-or-create-declaration scope *declaration-kind-function* (make-identifier 'test))))
+    (declare (ignore namespace))
+    (test-equal '|TEST| (mangled-name declaration))))
+
+(defsuite test-mangled-name ()
+  (test-mangled-name-simple))
 
 ;;;;============================================================================
 ;;;;    Scanners.
@@ -1560,14 +1624,14 @@ to the previous line."
 (defmethod parse-action ((production (eql 'ast-function-definition)) region state &rest rest)
   (declare (ignore rest region))
   (let* ((ast (call-next-method)))
-    (insert-declaration-into-symbol-table 'functions ast state)
+    (insert-declaration-into-symbol-table *declaration-kind-function* ast state)
     ast))
  
 ;; -----------------------------------------------------------------------------
 (defmethod parse-action ((production (eql 'ast-module-definition)) region state &rest rest)
   (declare (ignore rest region))
   (let ((ast (call-next-method)))
-    (insert-declaration-into-symbol-table 'modules ast state)
+    (insert-declaration-into-symbol-table *declaration-kind-module* ast state)
     ast))
 
 ;;;;============================================================================
@@ -2398,17 +2462,19 @@ to the previous line."
   ((block-stack
      :reader emitter-blocks
      :initform (progn
-                 (let ((array (make-array 10 :adjustable t :fill-pointer t :element-type 'emitter-block)))
+                 (let ((array (make-array 10 :adjustable t :fill-pointer 0 :element-type 'emitter-block)))
                    (vector-push-extend (make-instance 'emitter-block) array)
                    array)))
    (package-name
      :reader emitter-package-name
      :initarg :package-name
      :initform :flux-program)
-   (current-scope
-     :accessor current-emitter-scope)
+   (scope-stack
+     :reader scope-stack
+     :initform (make-scope-stack))
    (current-namespace
-     :accessor current-emitter-namespace)
+     :accessor current-namespace
+     :initform nil)
    functions
    types))
 
@@ -2483,13 +2549,22 @@ to the previous line."
     (test-equal (list 1 2 3 4 5 6) (current-emitter-block-head state))))
 
 ;; -----------------------------------------------------------------------------
-(defmacro test-emitter (code parser lambda-list &body checks)
+(defmacro test-emitter (code parser declarations lambda-list &body checks)
   (with-gensyms (ast parser-value state result)
     `(let* ((,parser-value ,parser)
             (,ast (funcall ,parser-value
                            (make-string-scanner ,code)
                            (make-instance 'parser-state)))
-            (,state (make-instance 'emitter-state))
+            (,state (let* ((state (make-instance 'emitter-state)))
+                      (push-scope (scope-stack state))
+                      ,@(loop for decl in declarations
+                              collect `(find-or-create-declaration (current-scope (scope-stack state))
+                                                                   ,(car decl)
+                                                                   (make-identifier ',@(mapcar
+                                                                                        (lambda (id)
+                                                                                          (intern id :flux-program))
+                                                                                        (cdr decl)))))
+                      state))
             (,result (emit ,ast ,state)))
        ,(if (not (listp lambda-list))
             `(let ((,lambda-list ,result))
@@ -2504,17 +2579,23 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-nothing-type) state)
   (declare (ignore state))
-  (intern "Nothing"))
+  (intern "Nothing"));////TODO: user proper lookup
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-named-type) state)
-  (declare (ignore state))
-  (identifier-to-lisp (ast-type-name ast)))
+  (let ((declaration (lookup-declaration (scope-stack state)
+                                         *declaration-kind-type*
+                                         (ast-type-name ast)
+                                         :current-namespace (current-namespace state))))
+    (if (not declaration)
+      (not-implemented "declaration not found"))
+    (mangled-name declaration)))
 
 (deftest test-emit-named-type-simple ()
   (test-emitter
       "Foobar"
       #'parse-type
+      ((*declaration-kind-type* "Foobar"))
       name
     (test-equal "Foobar" (symbol-name name))))
 
@@ -2539,6 +2620,7 @@ to the previous line."
   (test-emitter
     "return 0;"
     #'parse-statement
+    ()
     (operator name value)
     (declare (ignore operator name value))));////TODO
 
@@ -2568,6 +2650,7 @@ to the previous line."
   (test-emitter
       "type Foobar;"
       #'parse-definition
+      ()
       (operator name (superclass) slots)
     (declare (ignore slots))
     (test-equal 'defclass operator)
@@ -2578,6 +2661,7 @@ to the previous line."
   (test-emitter
       "type Foobar : Barfoo;"
       #'parse-definition
+      ((*declaration-kind-type* "Barfoo"))
       (operator name (superclass) slots)
     (declare (ignore operator name slots))
     (test-equal "Barfoo" (symbol-name superclass))))
@@ -2603,6 +2687,7 @@ to the previous line."
   (test-emitter
       "method Foobar() {}"
       #'parse-definition
+      ()
       (operator name () body)
     (declare (ignore body))
     (test-equal 'defmethod operator)
@@ -2645,6 +2730,7 @@ to the previous line."
   (test-emitter
       ""
       #'parse-compilation-unit
+      ()
       (&rest code)
     (test (find `(in-package :flux-program) code :test #'equal))))
 
