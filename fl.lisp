@@ -366,6 +366,13 @@
     :accessor source-ast)))
 
 ;; -----------------------------------------------------------------------------
+(defmethod local-scope (source)
+  (let ((ast (source-ast source)))
+    (if (not ast)
+      nil
+      (local-scope ast))))
+
+;; -----------------------------------------------------------------------------
 (defun make-source (code &key name path)
   (if (pathnamep code)
       (progn
@@ -655,7 +662,8 @@ to the previous line."
     :initarg :nodes
     :initform nil)
    (local-scope
-     :reader ast-local-scope)))
+     :accessor local-scope
+     :initarg :local-scope)))
 
 ;; -----------------------------------------------------------------------------
 ;; Representation of "::" denoting the global namespace.
@@ -869,7 +877,9 @@ to the previous line."
      :initarg :value)
    (body
      :reader ast-definition-body
-     :initarg :body)))
+     :initarg :body)
+   (declaration
+     :accessor ast-definition-declaration)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-type-definition (ast-definition)
@@ -904,6 +914,14 @@ to the previous line."
   ((definitions
      :reader ast-unit-definitions
      :initarg :definitions)))
+
+;; -----------------------------------------------------------------------------
+(defmethod local-scope ((ast ast-compilation-unit))
+  (local-scope (ast-unit-definitions ast)))
+
+;; -----------------------------------------------------------------------------
+(defmethod local-scope ((ast ast-definition))
+  (local-scope (ast-definition-body ast)))
 
 ;; -----------------------------------------------------------------------------
 (defparameter *global-qualifier* '|::|)
@@ -1048,6 +1066,17 @@ to the previous line."
      :initform nil)))
 
 ;; -----------------------------------------------------------------------------
+(defmacro with-scope (state scope &body body)
+  (with-gensyms (state-value scope-value)
+    `(let ((,state-value ,state)
+          (,scope-value ,scope))
+      (push-scope (scope-stack ,state-value) ,scope-value)
+      (unwind-protect
+         (progn
+           ,@body)
+         (pop-scope (scope-stack ,state-value))))))
+
+;; -----------------------------------------------------------------------------
 (defparameter *namespace-separator* "::")
 
 ;; -----------------------------------------------------------------------------
@@ -1120,10 +1149,14 @@ to the previous line."
     (test-same global-scope (current-scope stack :index 1))))
 
 ;; -----------------------------------------------------------------------------
-(defun add-definition (declaration definition)
+;; Adds 'definition' to the list of definitions for 'declarations'
+;; and returns 'definition-ast'.
+(defun add-definition (declaration definition-ast)
    (setf (slot-value declaration 'definitions)
-         (cons definition
-               (slot-value declaration 'definitions))))
+         (cons definition-ast
+               (slot-value declaration 'definitions)))
+   (setf (ast-definition-declaration definition-ast) declaration)
+   definition-ast)
 
 ;; -----------------------------------------------------------------------------
 (defun find-declaration (namespace name)
@@ -1621,18 +1654,18 @@ to the previous line."
                                rest)))
 
 ;; -----------------------------------------------------------------------------
-(defmethod parse-action ((production (eql 'ast-function-definition)) region state &rest rest)
-  (declare (ignore rest region))
-  (let* ((ast (call-next-method)))
-    (insert-declaration-into-symbol-table *declaration-kind-function* ast state)
-    ast))
- 
-;; -----------------------------------------------------------------------------
-(defmethod parse-action ((production (eql 'ast-module-definition)) region state &rest rest)
-  (declare (ignore rest region))
-  (let ((ast (call-next-method)))
-    (insert-declaration-into-symbol-table *declaration-kind-module* ast state)
-    ast))
+(defmacro parse-action-for-definition (ast-class declaration-kind)
+  `(defmethod parse-action ((production (eql ',ast-class)) region state &rest rest)
+     (declare (ignore rest region))
+     (let* ((ast (call-next-method)))
+       (insert-declaration-into-symbol-table ,declaration-kind ast state)
+       ast)))
+  
+(parse-action-for-definition ast-type-definition *declaration-kind-type*)
+(parse-action-for-definition ast-function-definition *declaration-kind-function*)
+(parse-action-for-definition ast-method-definition *declaration-kind-function*)
+(parse-action-for-definition ast-module-definition *declaration-kind-module*)
+(parse-action-for-definition ast-variable-definition *declaration-kind-variable*)
 
 ;;;;============================================================================
 ;;;;    Parsers.
@@ -1752,7 +1785,7 @@ to the previous line."
          (symbol-package (find-package symbol-package-name)))
     (if (not symbol-package)
       (progn
-        (setf symbol-package (defpackage symbol-package-name (:use :common-lisp)))
+        (setf symbol-package (make-package symbol-package-name :use :common-lisp))
         (setf (slot-value instance 'package-for-symbols) symbol-package))))
   
   ;; Set current scope to global scope.
@@ -2204,9 +2237,14 @@ to the previous line."
   (test-parse-return-statement))
 
 ;; -----------------------------------------------------------------------------
+;; Parse a list of statements surrounded by '{' and '}'.
 (defun parse-statement-list (scanner state)
-  "Parse a list of statements surrounded by '{' and '}'."
-  (parse-list parse-statement scanner state :start-delimiter #\{ :end-delimiter #\}))
+  (let ((scope (push-scope (scope-stack state)))
+        (result (parse-list parse-statement scanner state :start-delimiter #\{ :end-delimiter #\})))
+    (pop-scope (scope-stack state))
+    (if (parse-result-match-p result)
+      (setf (local-scope result) scope))
+    result))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-literal (scanner state)
@@ -2387,14 +2425,16 @@ to the previous line."
 ;; -----------------------------------------------------------------------------
 (defun parse-definition-list (scanner state)
   (push-scope (scope-stack state))
-  (let ((ast (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\}))
+  (let ((result (parse-list parse-definition scanner state :start-delimiter #\{ :end-delimiter #\}))
         (scope (pop-scope (scope-stack state))))
-    (setf (slot-value ast 'local-scope) scope)
-    ast))
+    (if (parse-result-match-p result)
+      (setf (slot-value (parse-result-value result) 'local-scope) scope))
+    result))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-compilation-unit (scanner state)
   (let* ((start-position (scanner-position scanner))
+         (global-scope (current-scope (scope-stack state)))
          (definitions (parse-list parse-definition scanner state))
          (result (parse-result-match
                    (parse-action 'ast-compilation-unit
@@ -2403,8 +2443,11 @@ to the previous line."
                                  :definitions (if (parse-result-no-match-p definitions)
                                                 (parse-action 'ast-list
                                                               (make-source-region start-position start-position)
-                                                              state)
-                                                (parse-result-value definitions))))))
+                                                              state
+                                                              :local-scope global-scope)
+                                                (let ((definitions (parse-result-value definitions)))
+                                                  (setf (local-scope definitions) global-scope)
+                                                  definitions))))))
     (if (not (scanner-at-end-p scanner))
         (not-implemented "parse error; unrecognized input"))
     result))
@@ -2588,8 +2631,9 @@ to the previous line."
                                          (ast-type-name ast)
                                          :current-namespace (current-namespace state))))
     (if (not declaration)
-      (not-implemented "declaration not found"))
-    (mangled-name declaration)))
+      (not-implemented (format nil "declaration for ~a not found" (identifier-to-string (ast-type-name ast)))))
+    ;;////TODO: mangled name should be stored in declaration rather than being generated over and over again
+    (mangled-name declaration :in-package (emitter-package-name state))))
 
 (deftest test-emit-named-type-simple ()
   (test-emitter
@@ -2629,8 +2673,9 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition) state)
-  (let* ((name (identifier-to-lisp (ast-definition-name ast)))
-         ;;////TODO: need to properly look up names
+  (let* ((declaration (ast-definition-declaration ast))
+         (name (mangled-name declaration :in-package (emitter-package-name state)))
+         ;;////TODO: need to properly look up Object
          (superclasses (if (not (ast-definition-type ast))
                            (if (not (eq name *object-class-name*))
                                (list *object-class-name*)
@@ -2639,11 +2684,11 @@ to the previous line."
          (class `(defclass ,name ,superclasses ())))
     (append-code-to-current-emitter-block state (list class))
     (if (definition-abstract-p ast)
-        (let ((error-message (format nil "Cannot instantiate abstract class ~a!"
-                                     (identifier-to-string (ast-definition-name ast)))))
-          (append-code-to-current-emitter-block state
-                        (list `(defmethod make-instance :before ((instance ,name) &key)
-                                 (error ,error-message))))))
+      (let ((error-message (format nil "Cannot instantiate abstract class ~a!"
+                                   (identifier-to-string (ast-definition-name ast)))))
+        (append-code-to-current-emitter-block state
+                                              (list `(defmethod make-instance :before ((instance ,name) &key)
+                                                       (error ,error-message))))))
     class))
 
 (deftest test-emit-type-definition-simple ()
@@ -2672,16 +2717,18 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-function-definition) state)
-  (let ((name (identifier-to-lisp (ast-definition-name ast))))
-    (push-emitter-block state :name name)
-    (let* ((body-ast  (ast-definition-body ast))
-           (body (if body-ast
-                   (mapcan (lambda (statement) (emit statement state)) (ast-list-nodes body-ast))
-                   nil))
-           (method `(defmethod ,name () ,body)))
-    (pop-emitter-block state)
-    (append-code-to-current-emitter-block state (list method))
-    method)))
+  (let* ((declaration (ast-definition-declaration ast))
+         (name (mangled-name declaration :in-package (emitter-package-name state))))
+    (with-scope state (local-scope ast)
+      (push-emitter-block state :name name)
+      (let* ((body-ast  (ast-definition-body ast))
+             (body (if body-ast
+                     (mapcan (lambda (statement) (emit statement state)) (ast-list-nodes body-ast))
+                     nil))
+             (method `(defmethod ,name () ,body)))
+        (pop-emitter-block state)
+        (append-code-to-current-emitter-block state (list method))
+        method))))
 
 (deftest test-emit-function-definition-simple ()
   (test-emitter
@@ -2703,9 +2750,10 @@ to the previous line."
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-module-definition) state)
-  (let ((body (ast-definition-body ast)))
-    (if body
-        (mapcar (lambda (definition) (emit definition state)) (ast-list-nodes body)))))
+  (with-scope state (local-scope ast)
+    (let ((body (ast-definition-body ast)))
+      (if body
+        (mapcar (lambda (definition) (emit definition state)) (ast-list-nodes body))))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-compilation-unit) state)
@@ -2721,8 +2769,9 @@ to the previous line."
                     (in-package ,package-name))))
 
   ;; Emit definitions.
-  (mapc (lambda (definition) (emit definition state))
-        (ast-list-nodes (ast-unit-definitions ast)))
+  (with-scope state (local-scope ast)
+    (mapc (lambda (definition) (emit definition state))
+          (ast-list-nodes (ast-unit-definitions ast))))
 
   (get-emitted-code state))
 
@@ -2785,9 +2834,10 @@ to the previous line."
 (defmethod verify-no-regression ((regression-spec-type (eql :call)) regression-spec source
                                                                     emitter-state generated-code)
   (declare (ignore source emitter-state generated-code))
-  (let ((function (get-regression-spec-argument regression-spec :function))
-        (result (get-regression-spec-argument regression-spec :result)))
-    (test-equal result (funcall (intern function)))))
+  (with-test-name CALL
+    (let ((function (get-regression-spec-argument regression-spec :function))
+          (result (read (make-string-input-stream (get-regression-spec-argument regression-spec :result)))))
+      (test-equal result (funcall (intern function))))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-spec-ignored-text (scanner state)
@@ -2915,29 +2965,33 @@ to the previous line."
   (test-parse-spec-list))
 
 ;; -----------------------------------------------------------------------------
-(deftest run-regression-tests ()
+(defun run-regression-tests ()
   (flet ((test-file (pathname)
            (if (find (pathname-type pathname) *flux-file-extensions* :test #'equal)
-               (with-test-name (pathname)
-                 (print (format nil "--- ~a ---" pathname))
-                 (let* ((test-package-name :flux-regression-tests)
-                        (source (make-source pathname))
-                        (regression-specs (parse-result-value
-                                            (parse-spec-list
-                                              (make-string-scanner (source-text source))
-                                              (make-instance 'parser-state))))
-                        (emitter-state (make-instance 'emitter-state
-                                                      :package-name test-package-name))
-                        code)
-                   (parse source :package-for-symbols test-package-name)
-                   (setf code (emit (source-ast source) emitter-state))
-                   (pprint code)
-                   (mapc (lambda (x) (print x) (eval x)) code)
-                   (mapc (lambda (spec)
-                           (verify-no-regression (regression-spec-type spec) spec source emitter-state code))
-                         regression-specs)
-                   (in-package :flux)
-                   (delete-package test-package-name))))))
+             (progn
+               (print (format nil "--- ~a ---" pathname))
+               (let* ((test-package-name :flux-regression-tests)
+                      (source (make-source pathname))
+                      (regression-specs (parse-result-value
+                                          (parse-spec-list
+                                            (make-string-scanner (source-text source))
+                                            (make-instance 'parser-state))))
+                      (emitter-state (make-instance 'emitter-state
+                                                    :package-name test-package-name))
+                      code)
+                 (parse source :package-for-symbols test-package-name)
+                 (setf code (emit (source-ast source) emitter-state))
+                 (print "=Code")
+                 (pprint code)
+                 (print "=Evaluation")
+                 (mapc (lambda (x) (print x) (eval x)) code)
+                 (print "=Specs")
+                 (fresh-line)
+                 (mapc (lambda (spec)
+                         (verify-no-regression (regression-spec-type spec) spec source emitter-state code))
+                       regression-specs)
+                 (in-package :flux)
+                 (delete-package test-package-name))))))
     (walk-directory *regression-suite-directory* #'test-file :directories nil))
   (in-package :flux))
 
