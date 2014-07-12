@@ -1,15 +1,34 @@
 
 (in-package :fl)
 
+;;////REVIEW: simplify this and do away with namespace entirely (make all names fully qualified)
+
 ;;;;============================================================================
 ;;;;    Symbol Tables.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
+;; Identifiers for the different kinds of declarations.
 (defparameter *declaration-kind-function* 'functions)
 (defparameter *declaration-kind-variable* 'variables)
 (defparameter *declaration-kind-module* 'modules)
 (defparameter *declaration-kind-type* 'types)
+
+;; -----------------------------------------------------------------------------
+;; Current stack of scopes.
+(defparameter *declaration-scope-stack* nil)
+
+;; -----------------------------------------------------------------------------
+(defparameter *declaration-current-module-scope* nil)
+
+;; -----------------------------------------------------------------------------
+(defparameter *declaration-current-toplevel-scope* nil)
+
+;; -----------------------------------------------------------------------------
+(defparameter *declaration-for-object-type* nil)
+
+;; -----------------------------------------------------------------------------
+(defparameter *declaration-package-for-names* *config-default-output-package*)
 
 ;; -----------------------------------------------------------------------------
 (defclass declaration ()
@@ -61,21 +80,68 @@
      :initform nil)))
 
 ;; -----------------------------------------------------------------------------
-(defmacro with-scope (state scope &body body)
-  (with-gensyms (state-value scope-value)
-    `(let ((,state-value ,state)
-          (,scope-value ,scope))
-      (push-scope (scope-stack ,state-value) ,scope-value)
-      (unwind-protect
+(defmacro with-package-for-symbols (package-for-symbols &body body)
+  (with-gensyms (package-for-symbols-value)
+    `(let* ((,package-for-symbols-value ,package-for-symbols)
+            (*declaration-package-for-names*
+              (cond ((packagep ,package-for-symbols)
+                     ,package-for-symbols-value)
+                    (,package-for-symbols-value
+                      (let ((package (find-package ,package-for-symbols-value)))
+                        (if (not package)
+                          (setf package
+                                (make-package ,package-for-symbols-value :use :common-lisp)))
+                        package))
+                    (t
+                     *config-default-output-package*))))
+       ,@body)))
+
+;; -----------------------------------------------------------------------------
+(defmacro with-new-toplevel-scope (&body body)
+  `(let* ((*declaration-scope-stack* (make-scope-stack))
+          (*declaration-current-toplevel-scope* (push-scope)))
+     ,@body))
+
+;; -----------------------------------------------------------------------------
+(defmacro with-toplevel-scope (scope &body body)
+  `(progn
+    (let ((*declaration-scope-stack* (make-scope-stack))
+          (*declaration-current-toplevel-scope* ,scope))
+       (push-scope *declaration-current-toplevel-scope*)
+       ,@body)))
+
+;; -----------------------------------------------------------------------------
+(defmacro with-new-scope (&body body)
+  `(unwind-protect
+     (progn
+       (push-scope)
+       ,@body)
+     (pop-scope)))
+
+;; -----------------------------------------------------------------------------
+(defmacro with-scope (scope &body body)
+  (with-gensyms (scope-value)
+    `(let ((,scope-value ,scope))
+       (push-scope ,scope-value)
+       (unwind-protect
          (progn
            ,@body)
-         (pop-scope (scope-stack ,state-value))))))
+         (pop-scope)))))
 
 ;; -----------------------------------------------------------------------------
-(defparameter *namespace-separator* "::")
+(defmacro with-module-scope (scope &body body)
+  (with-gensyms (scope-value)
+    `(let* ((,scope-value ,scope)
+            (*declaration-current-module-scope* ,scope-value))
+       (with-scope ,scope-value ,@body))))
 
 ;; -----------------------------------------------------------------------------
-(defun namespace-qualified-name (namespace)
+(defun make-declaration-name (text)
+  (assert *declaration-package-for-names*)
+  (intern text *declaration-package-for-names*))
+                  
+;; -----------------------------------------------------------------------------
+(defmethod get-qualified-name ((namespace namespace))
   (let ((parent (namespace-parent namespace)))
     (cond
       ((not parent)
@@ -86,62 +152,77 @@
       
       (t
        (concatenate 'string
-                    (namespace-qualified-name parent)
+                    (get-qualified-name parent)
                     *namespace-separator*
                     (symbol-name (namespace-name namespace)))))))
 
-(deftest test-namespace-qualified-name ()
+(deftest test-get-namespace-qualified-name ()
   (let* ((global (make-instance 'namespace))
          (outer (make-instance 'namespace :name 'outer :parent global))
          (inner (make-instance 'namespace :name 'inner :parent outer)))
-    (test-equal "" (namespace-qualified-name global))
-    (test-equal "OUTER" (namespace-qualified-name outer))
-    (test-equal "OUTER::INNER" (namespace-qualified-name inner))))
+    (test-equal "" (get-qualified-name global))
+    (test-equal "OUTER" (get-qualified-name outer))
+    (test-equal "OUTER::INNER" (get-qualified-name inner))))
 
 ;; -----------------------------------------------------------------------------
-(defun declaration-qualified-name (declaration)
-  (let ((namespace (namespace-qualified-name (declaration-namespace declaration)))
+(defmethod get-qualified-name ((declaration declaration))
+  (let ((namespace (get-qualified-name (declaration-namespace declaration)))
         (name (symbol-name (declaration-name declaration))))
     (if (zerop (length namespace))
       name
       (concatenate 'string namespace *namespace-separator* name))))
 
-(deftest test-declaration-qualified-name ()
+(deftest test-get-declaration-qualified-name ()
   (let* ((global (make-instance 'namespace))
          (namespace (make-instance 'namespace :name 'namespace :parent global))
          (declaration (make-instance 'declaration :name 'test :namespace namespace)))
-    (test-equal "NAMESPACE::TEST" (declaration-qualified-name declaration))))
+    (test-equal "NAMESPACE::TEST" (get-qualified-name declaration))))
 
 ;; -----------------------------------------------------------------------------
 (defun make-scope-stack ()
   (make-array 10 :element-type 'scope :adjustable t :fill-pointer 0))
 
 ;; -----------------------------------------------------------------------------
-(defun push-scope (scope-stack &optional scope)
+(defun push-scope (&optional scope)
+  (assert *declaration-scope-stack*)
   (if (not scope)
     (setf scope (make-instance 'scope)))
-  (vector-push-extend scope scope-stack)
+  (vector-push-extend scope *declaration-scope-stack*)
   scope)
 
 ;; -----------------------------------------------------------------------------
-(defun pop-scope (scope-stack)
-  (assert (>= (length scope-stack) 1))
-  (vector-pop scope-stack))
+(defun pop-scope ()
+  (assert *declaration-scope-stack*)
+  (assert (>= (length *declaration-scope-stack*) 1))
+  (vector-pop *declaration-scope-stack*))
 
 ;; -----------------------------------------------------------------------------
-(defun current-scope (scope-stack &key (index 0))
-  (let* ((scope-index (- (1- (length scope-stack)) index)))
-    (assert (>= scope-index 0))
-    (elt scope-stack scope-index)))
+(defun get-toplevel-scope ()
+  (elt *declaration-scope-stack* 0))
 
-(deftest test-current-scope ()
-  (let* ((stack (make-scope-stack))
-         (global-scope (make-instance 'scope))
-         (local-scope (make-instance 'scope)))
-    (push-scope stack global-scope)
-    (push-scope stack local-scope)
-    (test-same local-scope (current-scope stack))
-    (test-same global-scope (current-scope stack :index 1))))
+;; -----------------------------------------------------------------------------
+(defun get-current-scope (&key (index 0))
+  (assert *declaration-scope-stack*)
+  (let* ((scope-index (- (1- (length *declaration-scope-stack*)) index)))
+    (assert (>= scope-index 0))
+    (elt *declaration-scope-stack* scope-index)))
+
+(deftest test-get-current-scope ()
+  (with-new-toplevel-scope
+    (let* ((outer-scope (make-instance 'scope))
+           (inner-scope (make-instance 'scope)))
+      (push-scope outer-scope)
+      (push-scope inner-scope)
+      (test-same inner-scope (get-current-scope))
+      (test-same outer-scope (get-current-scope :index 1)))))
+
+;; -----------------------------------------------------------------------------
+(defun get-current-module-scope ()
+  *declaration-current-module-scope*)
+
+;; -----------------------------------------------------------------------------
+(defun get-current-toplevel-scope ()
+  *declaration-current-toplevel-scope*)
 
 ;; -----------------------------------------------------------------------------
 ;; Adds 'definition' to the list of definitions for 'declarations'
@@ -153,6 +234,25 @@
    (setf (ast-definition-declaration definition-ast) declaration)
    definition-ast)
 
+;; -----------------------------------------------------------------------------
+(defun get-special-declaration (declaration-kind name)
+  (let ((module-scope (get-current-module-scope))
+        (toplevel-scope (get-current-toplevel-scope)))
+    (assert (or module-scope
+                toplevel-scope))
+    ;;////TODO: deal with lookup failure
+    (lookup-declaration declaration-kind
+                        (make-identifier *ast-global-qualifier-symbol* (make-declaration-name name))
+                        :in-scope (or module-scope
+                                      toplevel-scope))))
+
+;; -----------------------------------------------------------------------------
+;; Return the declaration for the Object type.
+(defun get-object-type-declaration ()
+  (when (not *declaration-for-object-type*)
+    (setf *declaration-for-object-type* (get-special-declaration *declaration-kind-type* *config-object-type-name*)))
+  *declaration-for-object-type*)
+                        
 ;; -----------------------------------------------------------------------------
 (defun find-declaration (namespace name)
   (let ((declarations (namespace-declarations namespace)))
@@ -310,8 +410,7 @@
     (test-equal 'my-function (declaration-name declaration))))
 
 ;; -----------------------------------------------------------------------------
-;;////REVIEW: lookup should go through a more generic interface than AST identifiers
-(defun lookup-declaration (scope-stack declaration-kind identifier &key current-namespace)
+(defun lookup-declaration (declaration-kind identifier &key current-namespace in-scope)
   (let* ((qualifier (ast-id-qualifier identifier))
          (name (ast-id-name identifier))
          (is-globally-qualified (typep qualifier 'ast-global-qualifier)))
@@ -340,23 +439,25 @@
                (if target-namespace
                  (find-declaration target-namespace name)))))
 
-    (dotimes (scope-index (length scope-stack))
-      (let* ((current-scope (current-scope scope-stack :index scope-index))
-             (declaration (lookup-in-scope current-scope)))
-        (if declaration
-          (return declaration)))))))
+    (if in-scope
+      (lookup-in-scope in-scope)
+      (dotimes (scope-index (length *declaration-scope-stack*))
+        (let* ((current-scope (get-current-scope :index scope-index))
+               (declaration (lookup-in-scope current-scope)))
+          (if declaration
+            (return declaration))))))))
 
 (deftest test-lookup-declaration-in-current-scope ()
-  (let* ((id (make-identifier 'my-function))
-         (scope-stack (make-scope-stack))
-         (scope (push-scope scope-stack))
-         (declaration (find-or-create-declaration scope *declaration-kind-function* id)))
-    (test-same declaration (lookup-declaration scope-stack *declaration-kind-function* id))))
+  (with-new-toplevel-scope
+    (let* ((id (make-identifier 'my-function))
+           (declaration (find-or-create-declaration (get-current-scope) *declaration-kind-function* id)))
+      (test-same declaration (lookup-declaration *declaration-kind-function* id)))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-symbol-table ()
-  (test-namespace-qualified-name)
-  (test-declaration-qualified-name)
+  (test-get-current-scope)
+  (test-get-namespace-qualified-name)
+  (test-get-declaration-qualified-name)
   (test-find-or-insert-declaration)
   (test-create-child-namespace)
   (test-find-nested-child-namespace-returns-nil)
@@ -390,7 +491,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defun mangled-name (declaration &key in-package)
-  (let ((qualified-name (declaration-qualified-name declaration)))
+  (let ((qualified-name (get-declaration-qualified-name declaration)))
     (if in-package
       (intern qualified-name in-package)
       (intern qualified-name))))

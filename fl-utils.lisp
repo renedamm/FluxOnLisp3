@@ -2,6 +2,19 @@
 (in-package :fl)
 
 ;;;;============================================================================
+;;;;    Macro Utilities.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+;; Filter preceding keyword arguments out of the given list.  This is useful
+;; to define macros that have both keyword and rest arguments.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun filter-keyword-arguments (list)
+    (if (not (keywordp (car list)))
+      list
+      (filter-keyword-arguments (cddr list)))))
+
+;;;;============================================================================
 ;;;;    File Utilities.
 ;;;;============================================================================
 

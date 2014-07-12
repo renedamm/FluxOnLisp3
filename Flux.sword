@@ -129,6 +129,7 @@ modifier ->
 	| "protected"
 	| "using"
 	| "external"
+	| "friend"
 
 clause ->
 	  "when" expression

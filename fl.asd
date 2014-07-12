@@ -9,7 +9,7 @@
                (:file "fl-tests" :depends-on ("fl-common"))
                (:file "fl-regression-tests" :depends-on ("fl-common" "fl-tests" "fl-config" "fl-parser"))
                (:file "fl-ast" :depends-on ("fl-common" "fl-tests"))
-               (:file "fl-symbols" :depends-on ("fl-common" "fl-tests"))
+               (:file "fl-symbols" :depends-on ("fl-common" "fl-config" "fl-tests" "fl-ast"))
                (:file "fl-source" :depends-on ("fl-common" "fl-tests"))
                (:file "fl-diagnostics" :depends-on ("fl-common"))
                (:file "fl-scanner" :depends-on ("fl-common" "fl-tests"))

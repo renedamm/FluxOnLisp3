@@ -27,11 +27,11 @@
     :accessor source-ast)))
 
 ;; -----------------------------------------------------------------------------
-(defmethod local-scope (source)
+(defmethod get-local-scope (source)
   (let ((ast (source-ast source)))
     (if (not ast)
       nil
-      (local-scope ast))))
+      (get-local-scope ast))))
 
 ;; -----------------------------------------------------------------------------
 (defun make-source (code &key name path)

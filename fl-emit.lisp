@@ -2,8 +2,18 @@
 (in-package :fl)
 
 ;;;;============================================================================
-;;;;    Emitter.
+;;;;    Emitter State.
 ;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defparameter *emitter-current-namespace* nil)
+
+;; -----------------------------------------------------------------------------
+(defparameter *emitter-package-name* nil)
+
+;; -----------------------------------------------------------------------------
+;; Stack of Lisp code blocks that we are currently assembling.
+(defparameter *emitter-block-stack* nil)
 
 ;; -----------------------------------------------------------------------------
 ;; A block of emitted Lisp code.
@@ -15,74 +25,64 @@
    (name
     :initform nil)))
 
-;; -----------------------------------------------------------------------------
-(defclass emitter-state ()
-  ((block-stack
-     :reader emitter-blocks
-     :initform (progn
-                 (let ((array (make-array 10 :adjustable t :fill-pointer 0 :element-type 'emitter-block)))
-                   (vector-push-extend (make-instance 'emitter-block) array)
-                   array)))
-   (package-name
-     :reader emitter-package-name
-     :initarg :package-name
-     :initform :flux-program)
-   (scope-stack
-     :reader scope-stack
-     :initform (make-scope-stack))
-   (current-namespace
-     :accessor current-namespace
-     :initform nil)
-   functions
-   types))
+;;;;============================================================================
+;;;;    Emitter Helper Functions.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-;;////TODO: this has to go
-(defparameter *object-class-name* (intern "Object"))
+(defmacro with-new-emitter-state ((&key package-name) &body body)
+  `(let ((*emitter-block-stack*
+           (progn
+             (let ((array (make-array 10 :adjustable t :fill-pointer 0 :element-type 'emitter-block)))
+               (vector-push-extend (make-instance 'emitter-block) array)
+               array)))
+         (*emitter-current-namespace* nil)
+         (*emitter-package-name* (or ,package-name :flux-program)))
+     ,@body))
 
 ;; -----------------------------------------------------------------------------
-(defun current-emitter-block (state)
-  (let ((block-stack (slot-value state 'block-stack)))
-    (elt block-stack (1- (length block-stack)))))
+(defun get-current-emitter-block ()
+  (elt *emitter-block-stack* (1- (length *emitter-block-stack*))))
 
-(deftest test-current-emitter-block ()
-  (test (current-emitter-block (make-instance 'emitter-state))))
+(deftest test-get-current-emitter-block ()
+  (with-new-emitter-state ()
+    (test (get-current-emitter-block))))
 
 ;; -----------------------------------------------------------------------------
-(defun current-emitter-block-head (state)
-  (slot-value (current-emitter-block state) 'head))
+(defun get-current-emitter-block-head ()
+  (slot-value (get-current-emitter-block) 'head))
   
 ;; -----------------------------------------------------------------------------
-(defun current-emitter-block-tail (state)
-  (slot-value (current-emitter-block state) 'tail))
+(defun get-current-emitter-block-tail ()
+  (slot-value (get-current-emitter-block) 'tail))
   
 ;; -----------------------------------------------------------------------------
-(defun set-current-block-name (state name)
-  (setf (slot-value (current-emitter-block state) 'name) name))
+(defun set-current-block-name (name)
+  (setf (slot-value (get-current-emitter-block) 'name) name))
 
 ;; -----------------------------------------------------------------------------
-(defun get-current-block-name (state)
-  (slot-value (current-emitter-block state) 'name))
+(defun get-current-block-name ()
+  (slot-value (get-current-emitter-block) 'name))
 
 ;; -----------------------------------------------------------------------------
-(defun get-emitted-code (state)
-  (current-emitter-block-head state))
+(defun get-emitted-code ()
+  (slot-value (elt *emitter-block-stack* 0) 'head))
 
 ;; -----------------------------------------------------------------------------
-(defun push-emitter-block (state &key name)
+(defun push-emitter-block (&key name)
   (let ((block (make-instance 'emitter-block)))
-    (vector-push-extend block (slot-value state 'block-stack))
+    (vector-push-extend block *emitter-block-stack*)
     (if name
-        (set-current-block-name state name))
+        (set-current-block-name name))
     block))
 
 ;; -----------------------------------------------------------------------------
-(defun pop-emitter-block (state)
-  (vector-pop (slot-value state 'block-stack)))
+(defun pop-emitter-block ()
+  (vector-pop *emitter-block-stack*))
 
 ;; -----------------------------------------------------------------------------
-(defun append-code-to-current-emitter-block (state list)
-  (let* ((block (current-emitter-block state))
+(defun append-code-to-current-emitter-block (list)
+  (let* ((block (get-current-emitter-block))
          (head (slot-value block 'head)))
     (if (not head)
         (progn
@@ -94,61 +94,55 @@
   list)
 
 (deftest test-append-code-to-current-emitter-block ()
-  (let ((state (make-instance 'emitter-state))
-        (list1 (list 1 2 3))
-        (list2 (list 4 5 6)))
-    (append-code-to-current-emitter-block state list1)
-    (test (eq (current-emitter-block-head state) list1))
-    (test (eq (current-emitter-block-tail state) (last list1)))
+  (with-new-emitter-state ()
+    (let ((list1 (list 1 2 3))
+          (list2 (list 4 5 6)))
+      (append-code-to-current-emitter-block list1)
+      (test (eq (get-current-emitter-block-head) list1))
+      (test (eq (get-current-emitter-block-tail) (last list1)))
 
-    (append-code-to-current-emitter-block state list2)
-    (test (eq (current-emitter-block-head state) list1))
-    (test (eq (current-emitter-block-tail state) (last list2)))
-    (test-equal (list 1 2 3 4 5 6) (current-emitter-block-head state))))
+      (append-code-to-current-emitter-block list2)
+      (test (eq (get-current-emitter-block-head) list1))
+      (test (eq (get-current-emitter-block-tail) (last list2)))
+      (test-equal (list 1 2 3 4 5 6) (get-current-emitter-block-head)))))
 
 ;; -----------------------------------------------------------------------------
 (defmacro test-emitter (code parser declarations lambda-list &body checks)
-  (with-gensyms (ast parser-value state result)
-    `(let* ((,parser-value ,parser)
-            (,ast (funcall ,parser-value
-                           (make-string-scanner ,code)
-                           (make-instance 'parser-state)))
-            (,state (let* ((state (make-instance 'emitter-state)))
-                      (push-scope (scope-stack state))
-                      ,@(loop for decl in declarations
-                              collect `(find-or-create-declaration (current-scope (scope-stack state))
-                                                                   ,(car decl)
-                                                                   (make-identifier ',@(mapcar
-                                                                                        (lambda (id)
-                                                                                          (intern id :flux-program))
-                                                                                        (cdr decl)))))
-                      state))
-            (,result (emit ,ast ,state)))
-       ,(if (not (listp lambda-list))
-            `(let ((,lambda-list ,result))
-               ,@checks)
-            `(destructuring-bind ,lambda-list
-                 ,result
-               ,@checks)))))
+  (with-gensyms (ast result)
+    `(with-new-emitter-state ()
+       (with-new-parser-state
+         (let ((,ast (funcall ,parser (make-string-scanner ,code))))
+           ,@(loop for decl in declarations
+                   collect `(find-or-create-declaration (get-current-scope)
+                                                        ,(car decl)
+                                                        (make-identifier ',@(mapcar
+                                                                              (lambda (id)
+                                                                                (intern id :flux-program))
+                                                                              (cdr decl)))))
+           (let ((,result (emit ,ast)))
+             ,(if (not (listp lambda-list))
+                `(let ((,lambda-list ,result))
+                   ,@checks)
+                `(destructuring-bind ,lambda-list
+                   ,result
+                   ,@checks))))))))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric emit (ast state))
+(defgeneric emit (ast))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-nothing-type) state)
-  (declare (ignore state))
+(defmethod emit ((ast ast-nothing-type))
   (intern "Nothing"));////TODO: user proper lookup
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-named-type) state)
-  (let ((declaration (lookup-declaration (scope-stack state)
-                                         *declaration-kind-type*
+(defmethod emit ((ast ast-named-type))
+  (let ((declaration (lookup-declaration *declaration-kind-type*
                                          (ast-type-name ast)
-                                         :current-namespace (current-namespace state))))
+                                         :current-namespace *emitter-current-namespace*)))
     (if (not declaration)
       (not-implemented (format nil "declaration for ~a not found" (identifier-to-string (ast-type-name ast)))))
     ;;////TODO: mangled name should be stored in declaration rather than being generated over and over again
-    (mangled-name declaration :in-package (emitter-package-name state))))
+    (mangled-name declaration :in-package *emitter-package-name*)))
 
 (deftest test-emit-named-type-simple ()
   (test-emitter
@@ -162,18 +156,17 @@
   (test-emit-named-type-simple))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-integer-literal) state)
-  (declare (ignore state))
+(defmethod emit ((ast ast-integer-literal))
   (ast-literal-value ast))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-return-statement) state)
+(defmethod emit ((ast ast-return-statement))
   (let* ((value-expression (ast-return-expression ast))
          (value (if value-expression
-                  (emit value-expression state)
+                  (emit value-expression)
                   nil))
-         (code `(return-from ,(get-current-block-name state) ,value)))
-    (append-code-to-current-emitter-block state code)))
+         (code `(return-from ,(get-current-block-name) ,value)))
+    (append-code-to-current-emitter-block code)))
 
 (deftest test-emit-return-statement-with-simple-value ()
   (test-emitter
@@ -187,22 +180,21 @@
   (test-emit-return-statement-with-simple-value))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-type-definition) state)
+(defmethod emit ((ast ast-type-definition))
   (let* ((declaration (ast-definition-declaration ast))
-         (name (mangled-name declaration :in-package (emitter-package-name state)))
+         (name (mangled-name declaration :in-package *emitter-package-name*))
          ;;////TODO: need to properly look up Object
          (superclasses (if (not (ast-definition-type ast))
-                           (if (not (eq name *object-class-name*))
-                               (list *object-class-name*)
-                               ())
-                           (list (emit (ast-definition-type ast) state))))
+                         (if (not (eq name *config-object-type-name*))
+                           (list *config-object-type-name*)
+                           ())
+                         (list (emit (ast-definition-type ast)))))
          (class `(defclass ,name ,superclasses ())))
-    (append-code-to-current-emitter-block state (list class))
+    (append-code-to-current-emitter-block (list class))
     (if (definition-abstract-p ast)
       (let ((error-message (format nil "Cannot instantiate abstract class ~a!"
                                    (identifier-to-string (ast-definition-name ast)))))
-        (append-code-to-current-emitter-block state
-                                              (list `(defmethod make-instance :before ((instance ,name) &key)
+        (append-code-to-current-emitter-block (list `(defmethod make-instance :before ((instance ,name) &key)
                                                        (error ,error-message))))))
     class))
 
@@ -215,7 +207,7 @@
     (declare (ignore slots))
     (test-equal 'defclass operator)
     (test-equal "Foobar" (symbol-name name))
-    (test-equal *object-class-name* superclass)))
+    (test-equal *config-object-type-name* superclass)))
 
 (deftest test-emit-type-definition-single-supertype ()
   (test-emitter
@@ -231,18 +223,18 @@
   (test-emit-type-definition-single-supertype))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-function-definition) state)
+(defmethod emit ((ast ast-function-definition))
   (let* ((declaration (ast-definition-declaration ast))
-         (name (mangled-name declaration :in-package (emitter-package-name state))))
-    (with-scope state (local-scope ast)
-      (push-emitter-block state :name name)
+         (name (mangled-name declaration :in-package *emitter-package-name*)))
+    (with-scope (get-local-scope ast)
+      (push-emitter-block :name name)
       (let* ((body-ast  (ast-definition-body ast))
              (body (if body-ast
-                     (mapcan (lambda (statement) (emit statement state)) (ast-list-nodes body-ast))
+                     (mapcan (lambda (statement) (emit statement)) (ast-list-nodes body-ast))
                      nil))
              (method `(defmethod ,name () ,body)))
-        (pop-emitter-block state)
-        (append-code-to-current-emitter-block state (list method))
+        (pop-emitter-block)
+        (append-code-to-current-emitter-block (list method))
         method))))
 
 (deftest test-emit-function-definition-simple ()
@@ -259,24 +251,23 @@
   (test-emit-function-definition-simple))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-field-definition) state)
-  (declare (ignore state))
+(defmethod emit ((ast ast-field-definition))
   (not-implemented "emitting fields"))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-module-definition) state)
-  (with-scope state (local-scope ast)
+(defmethod emit ((ast ast-module-definition))
+  (with-module-scope (get-local-scope ast)
     (let ((body (ast-definition-body ast)))
       (if body
-        (mapcar (lambda (definition) (emit definition state)) (ast-list-nodes body))))))
+        (mapcar (lambda (definition) (emit definition)) (ast-list-nodes body))))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-compilation-unit) state)
+(defmethod emit ((ast ast-compilation-unit))
   "Emit code for compilation unit."
 
   ;; Emit prologue.
-  (let ((package-name (emitter-package-name state)))
-    (append-code-to-current-emitter-block state
+  (let ((package-name *emitter-package-name*))
+    (append-code-to-current-emitter-block
                   `((in-package :cl-user)
                     (defpackage ,package-name
                       (:use :common-lisp)
@@ -284,11 +275,11 @@
                     (in-package ,package-name))))
 
   ;; Emit definitions.
-  (with-scope state (local-scope ast)
-    (mapc (lambda (definition) (emit definition state))
+  (with-scope (get-local-scope ast)
+    (mapc (lambda (definition) (emit definition))
           (ast-list-nodes (ast-unit-definitions ast))))
 
-  (get-emitted-code state))
+  (get-emitted-code))
 
 (deftest test-emit-compilation-unit-prologue ()
   (test-emitter
@@ -303,9 +294,10 @@
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-emitters ()
-  (test-current-emitter-block)
+  (test-get-current-emitter-block)
   (test-append-code-to-current-emitter-block)
   (test-emit-type-definition)
   (test-emit-function-definition)
+  (test-emit-return-statement)
   (test-emit-compilation-unit))
 

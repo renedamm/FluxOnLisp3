@@ -2,7 +2,14 @@
 (in-package :fl)
 
 ;;;;============================================================================
-;;;;    ASTs.
+;;;;    AST Variables.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defparameter *ast-global-qualifier-symbol* '|::|)
+
+;;;;============================================================================
+;;;;    AST Classes.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
@@ -26,7 +33,7 @@
     :initarg :nodes
     :initform nil)
    (local-scope
-     :accessor local-scope
+     :accessor get-local-scope
      :initarg :local-scope)))
 
 ;; -----------------------------------------------------------------------------
@@ -279,16 +286,17 @@
      :reader ast-unit-definitions
      :initarg :definitions)))
 
-;; -----------------------------------------------------------------------------
-(defmethod local-scope ((ast ast-compilation-unit))
-  (local-scope (ast-unit-definitions ast)))
+;;;;============================================================================
+;;;;    AST Helpers.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defmethod local-scope ((ast ast-definition))
-  (local-scope (ast-definition-body ast)))
+(defmethod get-local-scope ((ast ast-compilation-unit))
+  (get-local-scope (ast-unit-definitions ast)))
 
 ;; -----------------------------------------------------------------------------
-(defparameter *global-qualifier* '|::|)
+(defmethod get-local-scope ((ast ast-definition))
+  (get-local-scope (ast-definition-body ast)))
 
 ;; -----------------------------------------------------------------------------
 (defun make-ast-error (diagnostic)
@@ -300,7 +308,7 @@
 (defun make-identifier (&rest names)
   (assert (>= (length names) 1))
   (cond
-    ((eq (car names) *global-qualifier*)
+    ((eq (car names) *ast-global-qualifier-symbol*)
      (let ((id (apply #'make-identifier (cdr names))))
        (setf (slot-value id 'qualifier) (make-instance 'ast-global-qualifier))
        id))
@@ -317,7 +325,7 @@
     (test-equal nil (ast-id-qualifier id))))
 
 (deftest test-make-identifier-with-global-qualifier ()
-  (let ((id (make-identifier *global-qualifier* 'test)))
+  (let ((id (make-identifier *ast-global-qualifier-symbol* 'test)))
     (test-equal "TEST" (symbol-name (ast-id-name id)))
     (test-type 'ast-global-qualifier (ast-id-qualifier id))))
 
@@ -355,11 +363,11 @@
 
 (deftest test-definition-has-modifier-p ()
   (let ((abstract-ast (parse-result-value
-                        (parse-definition (make-string-scanner "abstract type Foobar;")
-                                          (make-instance 'parser-state))))
+                        (with-new-parser-state
+                          (parse-definition (make-string-scanner "abstract type Foobar;")))))
         (plain-ast (parse-result-value
-                     (parse-definition (make-string-scanner "type Foobar;")
-                                       (make-instance 'parser-state)))))
+                     (with-new-parser-state
+                       (parse-definition (make-string-scanner "type Foobar;"))))))
     (test (definition-has-modifier-p abstract-ast 'ast-abstract-modifier))
     (test (not (definition-has-modifier-p plain-ast 'ast-abstract-modifier)))))
 

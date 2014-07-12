@@ -19,15 +19,13 @@
 
 ;; -----------------------------------------------------------------------------
 (defmethod parse ((code source) &key package-for-symbols)
-  (let* ((state (make-instance 'parser-state
-                               :line-break-table (source-line-breaks code)
-                               :diagnostics (source-diagnostics code)
-                               :package-for-symbols (if package-for-symbols package-for-symbols *flux-default-package*)))
-         (scanner (make-string-scanner (source-text code)))
-         (result (parse-compilation-unit scanner state))
-         (ast (parse-result-value result)))
-    (setf (source-ast code) ast)
-    (list ast)))
+  (with-package-for-symbols package-for-symbols
+    (with-new-parser-state
+      (let* ((scanner (make-string-scanner (source-text code)))
+             (result (parse-compilation-unit scanner))
+             (ast (parse-result-value result)))
+        (setf (source-ast code) ast)
+        (list ast)))))
 
 (deftest test-parse-code-source ()
   (let ((source (make-source "type Foobar;")))
@@ -52,17 +50,18 @@
 
 ;; -----------------------------------------------------------------------------
 (defun translate (source &key package-name)
-  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name :flux-program))))
-    (emit (source-ast source) emitter-state)))
+  (with-new-emitter-state (:package-name package-name)
+    (emit (source-ast source))))
 
 ;; -----------------------------------------------------------------------------
 (defun flux-to-lisp (code &key package-name)
   "Parses one or more units of Flux code and then translates them to Lisp.  Returns \
 the resulting Lisp expression."
-  (let ((emitter-state (make-instance 'emitter-state :package-name (if package-name package-name :flux-program)))
-        (asts (parse code)))
-    ;////TODO: need to do a pre-pass to gather all types
-    (mapc (lambda (ast) (emit ast emitter-state)) asts)
-    (values
-     (get-emitted-code emitter-state)
-     asts)))
+  (let ((asts (parse code :package-for-symbols package-name)))
+    (with-new-emitter-state (:package-name package-name)
+      ;;////TODO: need to do a pre-pass to gather all types
+      (mapc #'emit asts)
+      (values
+        (get-emitted-code)
+        asts))))
+
