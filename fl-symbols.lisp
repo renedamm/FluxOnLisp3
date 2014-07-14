@@ -236,15 +236,19 @@
 
 ;; -----------------------------------------------------------------------------
 (defun get-special-declaration (declaration-kind name)
-  (let ((module-scope (get-current-module-scope))
-        (toplevel-scope (get-current-toplevel-scope)))
-    (assert (or module-scope
-                toplevel-scope))
-    ;;////TODO: deal with lookup failure
-    (lookup-declaration declaration-kind
-                        (make-identifier *ast-global-qualifier-symbol* (make-declaration-name name))
-                        :in-scope (or module-scope
-                                      toplevel-scope))))
+  (let ((scope (or (get-current-module-scope)
+                   (get-current-toplevel-scope))))
+    (assert scope)
+    (let ((declaration (lookup-declaration declaration-kind
+                                           (make-identifier *ast-global-qualifier-symbol* (make-declaration-name name))
+                                           :in-scope scope)))
+      ;; If the declaration does not exist yet, create an import for it.
+      (if (not declaration)
+        ;;////TODO: mark as import
+        (setf declaration (find-or-create-declaration scope
+                                                      declaration-kind
+                                                      (make-identifier (make-declaration-name name)))))
+      declaration)))
 
 ;; -----------------------------------------------------------------------------
 ;; Return the declaration for the Object type.
@@ -308,10 +312,14 @@
            (namespace-children parent-namespace)))
 
 ;; -----------------------------------------------------------------------------
+;; Find the namespace inside 'parent-namespace' referenced by 'identifier'.
+;; Ignores global qualification, i.e. 'parent-namespace' must be the correct
+;; starting namespace.
 (defun find-nested-child-namespace (parent-namespace identifier &key if-does-not-exist)
   (let ((qualifier (ast-id-qualifier identifier))
         (inner-namespace parent-namespace))
-    (if qualifier
+    (if (and qualifier
+             (not (typep qualifier 'ast-global-qualifier)))
       (setf inner-namespace (find-nested-child-namespace parent-namespace
                                                          qualifier
                                                          :if-does-not-exist if-does-not-exist)))
@@ -413,10 +421,7 @@
 (defun lookup-declaration (declaration-kind identifier &key current-namespace in-scope)
   (let* ((qualifier (ast-id-qualifier identifier))
          (name (ast-id-name identifier))
-         (is-globally-qualified (typep qualifier 'ast-global-qualifier)))
-
-    (if is-globally-qualified
-      (setf qualifier (ast-id-qualifier qualifier)))
+         (is-globally-qualified (is-globally-qualified-p identifier)))
 
     (flet ((lookup-in-scope (scope)
              (let* ((starting-namespace
@@ -432,7 +437,8 @@
                           (get-namespace-for-declarations scope declaration-kind))))
                     (target-namespace
                       (cond
-                        (qualifier
+                        ((and qualifier
+                              (not (typep qualifier 'ast-global-qualifier)))
                           (find-nested-child-namespace starting-namespace qualifier))
                         (t
                           starting-namespace))))
@@ -453,6 +459,18 @@
            (declaration (find-or-create-declaration (get-current-scope) *declaration-kind-function* id)))
       (test-same declaration (lookup-declaration *declaration-kind-function* id)))))
 
+(deftest test-lookup-declaration-globally-qualified ()
+  (with-new-toplevel-scope
+    (let* ((id (make-identifier *ast-global-qualifier-symbol* 'my-function))
+           (declaration (find-or-create-declaration (get-current-scope)
+                                                    *declaration-kind-function*
+                                                    (make-identifier 'my-function))))
+      (test-same declaration (lookup-declaration *declaration-kind-function* id)))))
+
+(deftest test-lookup-declaration ()
+  (test-lookup-declaration-in-current-scope)
+  (test-lookup-declaration-globally-qualified))
+
 ;; -----------------------------------------------------------------------------
 (defsuite test-symbol-table ()
   (test-get-current-scope)
@@ -465,7 +483,7 @@
   (test-get-namespace-for-declarations)
   (test-lookup-namespace-simple)
   (test-find-or-create-declaration)
-  (test-lookup-declaration-in-current-scope))
+  (test-lookup-declaration))
 
 ;;;;============================================================================
 ;;;;    Naming Conventions.
@@ -490,19 +508,19 @@
 ;; emit a Lisp identifier that uniquely refers to that declaration.
 
 ;; -----------------------------------------------------------------------------
-(defun mangled-name (declaration &key in-package)
-  (let ((qualified-name (get-declaration-qualified-name declaration)))
+(defun get-mangled-name (declaration &key in-package)
+  (let ((qualified-name (get-qualified-name declaration)))
     (if in-package
       (intern qualified-name in-package)
       (intern qualified-name))))
 
-(deftest test-mangled-name-simple ()
+(deftest test-get-mangled-name-simple ()
   (let* ((scope (make-instance 'scope))
          (namespace (get-namespace-for-declarations scope *declaration-kind-function*))
          (declaration (find-or-create-declaration scope *declaration-kind-function* (make-identifier 'test))))
     (declare (ignore namespace))
-    (test-equal '|TEST| (mangled-name declaration))))
+    (test-equal '|TEST| (get-mangled-name declaration))))
 
-(defsuite test-mangled-name ()
-  (test-mangled-name-simple))
+(defsuite test-get-mangled-name ()
+  (test-get-mangled-name-simple))
 

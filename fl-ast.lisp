@@ -41,6 +41,7 @@
 (defclass ast-global-qualifier (ast-node)
   ())
 
+;;////REVIEW: i think it makes more sense to make the qualifiers a class separate from identifiers where the list is in the order they need to be looked up
 ;; -----------------------------------------------------------------------------
 ;; A (potentially qualified) identifier.
 (defclass ast-identifier (ast-node)
@@ -307,17 +308,14 @@
 ;; -----------------------------------------------------------------------------
 (defun make-identifier (&rest names)
   (assert (>= (length names) 1))
-  (cond
-    ((eq (car names) *ast-global-qualifier-symbol*)
-     (let ((id (apply #'make-identifier (cdr names))))
-       (setf (slot-value id 'qualifier) (make-instance 'ast-global-qualifier))
-       id))
-    ((cdr names)
-     (let ((id (apply #'make-identifier (cdr names))))
-       (setf (slot-value id 'qualifier) (make-instance 'ast-identifier :name (car names)))
-       id))
-    (t
-     (make-instance 'ast-identifier :name (car names)))))
+  (loop
+    for name in names
+    for id = (if (eq name *ast-global-qualifier-symbol*)
+               (make-instance 'ast-global-qualifier)
+               (make-instance 'ast-identifier
+                              :name name
+                              :qualifier id))
+    finally (return id)))
 
 (deftest test-make-identifier-simple ()
   (let ((id (make-identifier 'test)))
@@ -325,9 +323,11 @@
     (test-equal nil (ast-id-qualifier id))))
 
 (deftest test-make-identifier-with-global-qualifier ()
-  (let ((id (make-identifier *ast-global-qualifier-symbol* 'test)))
+  (let ((id (make-identifier *ast-global-qualifier-symbol* 'outer 'inner 'test)))
     (test-equal "TEST" (symbol-name (ast-id-name id)))
-    (test-type 'ast-global-qualifier (ast-id-qualifier id))))
+    (test-equal "INNER" (symbol-name (ast-id-name (ast-id-qualifier id))))
+    (test-equal "OUTER" (symbol-name (ast-id-name (ast-id-qualifier (ast-id-qualifier id)))))
+    (test-type 'ast-global-qualifier (ast-id-qualifier (ast-id-qualifier (ast-id-qualifier id))))))
 
 (deftest test-make-identifier-with-namespace ()
   (let ((id (make-identifier 'outer 'inner)))
@@ -335,6 +335,22 @@
     (test-type 'ast-identifier (ast-id-qualifier id))
     (test-equal "OUTER" (symbol-name (ast-id-name (ast-id-qualifier id))))))
 
+(deftest test-make-identifier ()
+  (test-make-identifier-simple)
+  (test-make-identifier-with-global-qualifier)
+  (test-make-identifier-with-namespace))
+
+;; -----------------------------------------------------------------------------
+(defun is-globally-qualified-p (id)
+  (let ((qualifier (ast-id-qualifier id)))
+    (cond
+      ((not qualifier)
+       nil)
+      ((typep qualifier 'ast-global-qualifier)
+       t)
+      (t
+       (is-globally-qualified-p qualifier)))))
+ 
 ;; -----------------------------------------------------------------------------
 (defun identifier-to-string (id)
   (let ((qualifier (ast-id-qualifier id)))
@@ -377,9 +393,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-asts ()
-  (test-make-identifier-simple)
-  (test-make-identifier-with-global-qualifier)
-  (test-make-identifier-with-namespace)
+  (test-make-identifier)
   (test-identifier-to-string)
   (test-definition-has-modifier-p))
 

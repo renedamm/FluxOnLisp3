@@ -25,5 +25,5 @@
 (defparameter *namespace-separator* "::")
 
 ;; -----------------------------------------------------------------------------
-(defparameter *config-object-type-name* (intern "Object"))
+(defparameter *config-object-type-name* "Object")
 

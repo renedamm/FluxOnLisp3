@@ -142,7 +142,7 @@
     (if (not declaration)
       (not-implemented (format nil "declaration for ~a not found" (identifier-to-string (ast-type-name ast)))))
     ;;////TODO: mangled name should be stored in declaration rather than being generated over and over again
-    (mangled-name declaration :in-package *emitter-package-name*)))
+    (get-mangled-name declaration :in-package *emitter-package-name*)))
 
 (deftest test-emit-named-type-simple ()
   (test-emitter
@@ -152,7 +152,7 @@
       name
     (test-equal "Foobar" (symbol-name name))))
 
-(defsuite test-emit-named-type ()
+(deftest test-emit-named-type ()
   (test-emit-named-type-simple))
 
 ;; -----------------------------------------------------------------------------
@@ -176,17 +176,17 @@
     (operator name value)
     (declare (ignore operator name value))));////TODO
 
-(defsuite test-emit-return-statement ()
+(deftest test-emit-return-statement ()
   (test-emit-return-statement-with-simple-value))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition))
   (let* ((declaration (ast-definition-declaration ast))
-         (name (mangled-name declaration :in-package *emitter-package-name*))
-         ;;////TODO: need to properly look up Object
+         (name (get-mangled-name declaration :in-package *emitter-package-name*))
+         (object-type (get-object-type-declaration))
          (superclasses (if (not (ast-definition-type ast))
-                         (if (not (eq name *config-object-type-name*))
-                           (list *config-object-type-name*)
+                         (if (not (eq declaration object-type))
+                           (list (get-mangled-name object-type :in-package *emitter-package-name*))
                            ())
                          (list (emit (ast-definition-type ast)))))
          (class `(defclass ,name ,superclasses ())))
@@ -207,7 +207,7 @@
     (declare (ignore slots))
     (test-equal 'defclass operator)
     (test-equal "Foobar" (symbol-name name))
-    (test-equal *config-object-type-name* superclass)))
+    (test-equal *config-object-type-name* (symbol-name superclass))))
 
 (deftest test-emit-type-definition-single-supertype ()
   (test-emitter
@@ -218,14 +218,14 @@
     (declare (ignore operator name slots))
     (test-equal "Barfoo" (symbol-name superclass))))
 
-(defsuite test-emit-type-definition ()
+(deftest test-emit-type-definition ()
   (test-emit-type-definition-simple)
   (test-emit-type-definition-single-supertype))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-function-definition))
   (let* ((declaration (ast-definition-declaration ast))
-         (name (mangled-name declaration :in-package *emitter-package-name*)))
+         (name (get-mangled-name declaration :in-package *emitter-package-name*)))
     (with-scope (get-local-scope ast)
       (push-emitter-block :name name)
       (let* ((body-ast  (ast-definition-body ast))
@@ -247,7 +247,7 @@
     (test-equal 'defmethod operator)
     (test-equal "Foobar" (symbol-name name))))
 
-(defsuite test-emit-function-definition ()
+(deftest test-emit-function-definition ()
   (test-emit-function-definition-simple))
 
 ;; -----------------------------------------------------------------------------
@@ -289,7 +289,7 @@
       (&rest code)
     (test (find `(in-package :flux-program) code :test #'equal))))
 
-(defsuite test-emit-compilation-unit ()
+(deftest test-emit-compilation-unit ()
   (test-emit-compilation-unit-prologue))
 
 ;; -----------------------------------------------------------------------------

@@ -411,6 +411,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defun parse-identifier (scanner)
+  ;;////TODO: parse qualified identifiers
   (let ((start-position (scanner-position scanner))
         (next-char (scanner-peek-next scanner))
         (buffer (make-array 64 :adjustable t :fill-pointer 0 :element-type 'character)))
