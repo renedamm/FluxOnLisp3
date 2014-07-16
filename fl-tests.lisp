@@ -106,7 +106,9 @@
      (deftest-internal ,name ,parameters
        (combine-results
          ,@body))
-     (setf *test-suites* (cons #',name *test-suites*))))
+     ;;////FIXME: this sucks for reloading
+     (if (not (member #',name *test-suites*))
+       (setf *test-suites* (cons #',name *test-suites*)))))
 
 ;; -----------------------------------------------------------------------------
 ;////TODO: print test summary at end

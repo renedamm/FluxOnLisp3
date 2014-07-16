@@ -55,6 +55,11 @@
   (cons left right))
 
 ;; -----------------------------------------------------------------------------
+(defun combine-source-region (first second)
+  (make-source-region (min (car first) (car second))
+                      (max (cdr first) (cdr second))))
+
+;; -----------------------------------------------------------------------------
 (defun source-region-empty (region)
   (= (car region)
      (cdr region)))

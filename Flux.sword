@@ -87,7 +87,7 @@ value_parameters ->
 	  "(" {value_parameter:::","} ")"
 
 value_parameter ->
-	  ( modifier* identifier ":" )? type ( "=" expression )?
+	  ( attributes? modifier* identifier ":" )? type ( "=" expression )?
 
 type_arguments ->
 	  "<" {type:::","} ">"

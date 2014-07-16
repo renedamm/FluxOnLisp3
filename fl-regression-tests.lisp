@@ -186,6 +186,7 @@
                      (print "=Code")
                      (pprint code)
                      (print "=Evaluation")
+                     ;;////FIXME: this should really be evaluated en bloc like the contents of a file rather than piecemeal
                      (mapc (lambda (x) (print x) (eval x)) code)
                      (print "=Specs")
                      (fresh-line)

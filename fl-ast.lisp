@@ -8,6 +8,24 @@
 ;; -----------------------------------------------------------------------------
 (defparameter *ast-global-qualifier-symbol* '|::|)
 
+;; -----------------------------------------------------------------------------
+(defparameter *ast-prefix-increment-operator* :prefix-increment)
+
+;; -----------------------------------------------------------------------------
+(defparameter *ast-postfix-increment-operator* :postfix-increment)
+
+;; -----------------------------------------------------------------------------
+(defparameter *ast-prefix-decrement-operator* :prefix-decrement)
+
+;; -----------------------------------------------------------------------------
+(defparameter *ast-postfix-decrement-operator* :postfix-decrement)
+
+;; -----------------------------------------------------------------------------
+(defparameter *ast-plus-operator* :plus)
+
+;; -----------------------------------------------------------------------------
+(defparameter *ast-minus-operator* :minus)
+
 ;;;;============================================================================
 ;;;;    AST Classes.
 ;;;;============================================================================
@@ -180,6 +198,28 @@
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-operator-expression (ast-expression)
+  ((operator
+     :reader ast-operator
+     :initarg :operator
+     :documentation "Keyword symbol for operator.")
+   (operands
+     :reader ast-operands
+     :initarg :operands
+     :documentation "List of operand ASTs.")))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-dot-expression (ast-expression)
+  ((value
+     :reader get-value-expression
+     :initarg :value
+     :documentation "Left side value expression AST.")
+   (member
+     :reader get-member-name
+     :initarg :member
+     :documentation "Right side ASTIdentifier denoting 'member' name.")))
+
+;; -----------------------------------------------------------------------------
 (defclass ast-type (ast-node)
   ((modifiers
     :reader ast-type-modifiers
@@ -278,6 +318,18 @@
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-parameter-definition (ast-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-value-parameter-definition (ast-parameter-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-type-parameter-definition (ast-parameter-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ast-module-definition (ast-definition)
   ())
 
@@ -290,6 +342,11 @@
 ;;;;============================================================================
 ;;;;    AST Helpers.
 ;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defmethod print-object ((object ast-identifier) stream)
+  (print-unreadable-object (object stream :type t)
+    (princ (identifier-to-string object) stream)))
 
 ;; -----------------------------------------------------------------------------
 (defmethod get-local-scope ((ast ast-compilation-unit))
