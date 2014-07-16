@@ -25,6 +25,9 @@
 (defparameter *declaration-current-toplevel-scope* nil)
 
 ;; -----------------------------------------------------------------------------
+(defparameter *declaration-current-namespace* nil)
+
+;; -----------------------------------------------------------------------------
 (defparameter *declaration-for-object-type* nil)
 
 ;; -----------------------------------------------------------------------------
@@ -418,6 +421,7 @@
     (test-equal 'my-function (declaration-name declaration))))
 
 ;; -----------------------------------------------------------------------------
+;;////FIXME: use *declaration-current-namespace*
 (defun lookup-declaration (declaration-kind identifier &key current-namespace in-scope)
   (let* ((qualifier (ast-id-qualifier identifier))
          (name (ast-id-name identifier))
@@ -508,6 +512,7 @@
 ;; emit a Lisp identifier that uniquely refers to that declaration.
 
 ;; -----------------------------------------------------------------------------
+;;////TODO: move in-package to global state
 (defun get-mangled-name (declaration &key in-package)
   (let ((qualified-name (get-qualified-name declaration)))
     (if in-package

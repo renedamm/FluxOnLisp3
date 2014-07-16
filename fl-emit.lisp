@@ -6,9 +6,6 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defparameter *emitter-current-namespace* nil)
-
-;; -----------------------------------------------------------------------------
 (defparameter *emitter-package-name* nil)
 
 ;; -----------------------------------------------------------------------------
@@ -36,7 +33,6 @@
              (let ((array (make-array 10 :adjustable t :fill-pointer 0 :element-type 'emitter-block)))
                (vector-push-extend (make-instance 'emitter-block) array)
                array)))
-         (*emitter-current-namespace* nil)
          (*emitter-package-name* (or ,package-name :flux-program)))
      ,@body))
 
@@ -132,13 +128,12 @@
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-nothing-type))
-  (intern "Nothing"));////TODO: user proper lookup
+  (intern "Nothing"));////TODO: use proper lookup
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-named-type))
   (let ((declaration (lookup-declaration *declaration-kind-type*
-                                         (ast-type-name ast)
-                                         :current-namespace *emitter-current-namespace*)))
+                                         (ast-type-name ast))))
     (if (not declaration)
       (not-implemented (format nil "declaration for ~a not found" (identifier-to-string (ast-type-name ast)))))
     ;;////TODO: mangled name should be stored in declaration rather than being generated over and over again
@@ -156,8 +151,29 @@
   (test-emit-named-type-simple))
 
 ;; -----------------------------------------------------------------------------
-(defmethod emit ((ast ast-integer-literal))
+(defmethod emit ((ast ast-literal-expression))
   (ast-literal-value ast))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-dot-expression))
+  (let* ((value (emit (get-value-expression ast)))
+         ;;////TODO: deal with lookup failure
+         (declaration (lookup-declaration *declaration-kind-function*
+                                          (get-member-name ast)))
+         (function-name (get-mangled-name declaration :in-package *emitter-package-name*)))
+    `(,function-name ,value)))
+
+(deftest test-emit-dot-expression-simple ()
+  (test-emitter
+      "1.ToString"
+      #'parse-expression
+      ((*declaration-kind-function* "ToString"))
+      (function-name argument)
+    (test-equal "ToString" (symbol-name function-name))
+    (test-equal 1 argument)))
+
+(deftest test-emit-dot-expression ()
+  (test-emit-dot-expression-simple))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-return-statement))
@@ -298,6 +314,7 @@
   (test-append-code-to-current-emitter-block)
   (test-emit-type-definition)
   (test-emit-function-definition)
+  (test-emit-dot-expression)
   (test-emit-return-statement)
   (test-emit-compilation-unit))
 

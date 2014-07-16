@@ -632,13 +632,13 @@
     
     ;;////TODO: deal with parse error
     (parse-result-value
-      (make-instance 'ast-value-parameter-definition
-                     :source-region (make-source-region start-position scanner)
-                     :attributes attributes
-                     :modifiers (parse-result-match-value-or modifiers nil)
-                     :name identifier
-                     :type type
-                     :value value))))
+      (parse-action 'ast-value-parameter-definition
+                    (make-source-region start-position scanner)
+                    :attributes attributes
+                    :modifiers (parse-result-match-value-or modifiers nil)
+                    :name identifier
+                    :type type
+                    :value value))))
 
 (deftest test-parse-value-parameter-simple ()
   (test-parser parse-value-parameter "Foo : Integer"
@@ -735,36 +735,89 @@
   (test-parse-statement-list-simple))
 
 ;; -----------------------------------------------------------------------------
+(defun parse-character (scanner)
+  (if (scanner-at-end-p scanner)
+    (parse-result-no-match)
+    (let ((next-char (scanner-read-next scanner)))
+      (if (equal next-char #\\)
+        (not-implemented "escape sequences")
+        (parse-result-match next-char)))))
+
+(deftest test-parse-character-simple ()
+  (test-parser parse-character "c"
+               :is-match-p t
+               :expected-type 'character
+               :checks ((test-equal #\c ast))))
+
+(deftest test-parse-character ()
+  (test-parse-character-simple))
+
+;; -----------------------------------------------------------------------------
 (defun parse-literal (scanner)
   (if (scanner-at-end-p scanner)
       (parse-result-no-match)
       (let ((saved-position (scanner-position scanner))
             (next-char (scanner-read-next scanner)))
-        (cond ((digit-char-p next-char)
-               (if (and (char-equal #\0 next-char)
-                        (scanner-match scanner #\x))
-                   (not-implemented "hex literals"))
-               (let ((value (digit-char-to-integer next-char)))
-                 (loop
-                    (if (scanner-at-end-p scanner)
-                        (return))
-                    (setf next-char (scanner-peek-next scanner))
-                    (if (not (digit-char-p next-char))
-                        (return))
-                    (scanner-read-next scanner)
-                    (setf value (+ (digit-char-to-integer next-char) (* value 10))))
-                 (parse-result-match (parse-action 'ast-integer-literal
-                                                   (make-source-region saved-position scanner)
-                                                   :value value))))
-              (t (not-implemented "literal"))))))
+        (cond 
 
-(deftest test-parse-integer-literal ()
+            ((equal next-char #\")
+             (let ((buffer (make-array 64 :adjustable t :fill-pointer 0 :element-type 'character)))
+               (loop while (not (scanner-match scanner #\"))
+                     do
+                     (setf next-char (parse-character scanner))
+                     (if (parse-result-no-match-p next-char)
+                       (not-implemented "expecting character"))
+                     (vector-push-extend (parse-result-value next-char) buffer))
+               (parse-result-match
+                 (parse-action 'ast-string-literal
+                               (make-source-region saved-position scanner)
+                               ;;////TODO: strings should go into a table
+                               :value buffer))))
+
+            ((equal next-char #\')
+             (let ((char (parse-character scanner)))
+               (if (parse-result-no-match-p char)
+                 (not-implemented "expecting character"))
+               (if (not (scanner-match scanner #\'))
+                 (not-implemented "expecting '"))
+               (parse-result-match
+                 (parse-action 'ast-character-literal
+                               (make-source-region saved-position scanner)
+                               :value (parse-result-value char)))))
+
+            ((digit-char-p next-char)
+             (if (and (char-equal #\0 next-char)
+                      (scanner-match scanner #\x))
+               (not-implemented "hex literals"))
+             (let ((value (digit-char-to-integer next-char)))
+               (loop
+                 (if (scanner-at-end-p scanner)
+                   (return))
+                 (setf next-char (scanner-peek-next scanner))
+                 (if (not (digit-char-p next-char))
+                   (return))
+                 (scanner-read-next scanner)
+                 (setf value (+ (digit-char-to-integer next-char) (* value 10))))
+               (parse-result-match (parse-action 'ast-integer-literal
+                                                 (make-source-region saved-position scanner)
+                                                 :value value))))
+
+            (t (not-implemented "literal"))))))
+
+(deftest test-parse-literal-integer ()
   (test-parser parse-literal "12" :is-match-p t :expected-type 'ast-integer-literal
                :checks ((test-equal 12 (ast-literal-value ast)))))
 
+(deftest test-parse-literal-string-simple ()
+  (test-parser parse-literal "\"foo\""
+               :is-match-p t
+               :expected-type 'ast-string-literal
+               :checks ((test-equal "foo" (ast-literal-value ast)))))
+
 (deftest test-parse-literal ()
   (test-parser parse-literal "" :is-match-p nil)
-  (test-parse-integer-literal))
+  (test-parse-literal-integer)
+  (test-parse-literal-string-simple))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-expression (scanner)
@@ -799,8 +852,8 @@
               (if (not (parse-result-match-p name))
                 (not-implemented "expecting identifier after '.'"))
               (setf expression (parse-result-value
-                                 (make-instance 'ast-dot-expression
-                                                :source-region (make-source-region start-pos (scanner-position scanner))
+                                 (parse-action 'ast-dot-expression
+                                                (make-source-region start-pos (scanner-position scanner))
                                                 :value (parse-result-value expression)
                                                 :member name)))))
 
@@ -1014,6 +1067,7 @@
   (test-parse-modifier)
   (test-parse-modifier-list)
   (test-parse-identifier)
+  (test-parse-character)
   (test-parse-literal)
   (test-parse-type)
   (test-parse-expression)
