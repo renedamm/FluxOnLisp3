@@ -186,14 +186,40 @@
 
 (deftest test-emit-return-statement-with-simple-value ()
   (test-emitter
-    "return 0;"
-    #'parse-statement
-    ()
-    (operator name value)
+      "return 0;"
+      #'parse-statement
+      ()
+      (operator name value)
     (declare (ignore operator name value))));////TODO
 
 (deftest test-emit-return-statement ()
   (test-emit-return-statement-with-simple-value))
+
+;; -----------------------------------------------------------------------------
+(defmethod emit ((ast ast-value-parameter-definition))
+  (let* ((declaration (ast-definition-declaration ast))
+         (name (get-mangled-name declaration :in-package *emitter-package-name*)))
+    name))
+
+(deftest test-emit-value-parameter-definition-simple ()
+  (test-emitter
+      "Foo : Bar"
+      #'parse-value-parameter
+      ((*declaration-kind-type* "Bar"))
+      name
+    (test-equal "Foo" (symbol-name name))))
+
+(deftest test-emit-value-parameter-definition-shorthand ()
+  (test-emitter
+      "Foo"
+      #'parse-value-parameter
+      ((*declaration-kind-type* "Foo"))
+      name
+    (test-equal "Foo" (symbol-name name))))
+
+(deftest test-emit-value-parameter-definition ()
+  (test-emit-value-parameter-definition-simple)
+  (test-emit-value-parameter-definition-shorthand))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-type-definition))
@@ -241,14 +267,18 @@
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-function-definition))
   (let* ((declaration (ast-definition-declaration ast))
-         (name (get-mangled-name declaration :in-package *emitter-package-name*)))
+         (name (get-mangled-name declaration :in-package *emitter-package-name*))
+         (parameters (let ((value-parameter-list (ast-definition-value-parameters ast)))
+                       (if value-parameter-list
+                         (mapcar #'emit (ast-list-nodes value-parameter-list))
+                         nil))))
     (with-scope (get-local-scope ast)
       (push-emitter-block :name name)
       (let* ((body-ast  (ast-definition-body ast))
              (body (if body-ast
                      (mapcan (lambda (statement) (emit statement)) (ast-list-nodes body-ast))
                      nil))
-             (method `(defmethod ,name () ,body)))
+             (method `(defmethod ,name ,parameters ,body)))
         (pop-emitter-block)
         (append-code-to-current-emitter-block (list method))
         method))))
@@ -263,8 +293,18 @@
     (test-equal 'defmethod operator)
     (test-equal "Foobar" (symbol-name name))))
 
+(deftest test-emit-function-definition-with-argument ()
+  (test-emitter
+      "method Foobar( Integer ) {}"
+      #'parse-definition
+      ((*declaration-kind-type* "Integer"))
+      (operator name (arg) body)
+    (declare (ignore operator name body))
+    (test-equal "Integer" (symbol-name arg))))
+
 (deftest test-emit-function-definition ()
-  (test-emit-function-definition-simple))
+  (test-emit-function-definition-simple)
+  (test-emit-function-definition-with-argument))
 
 ;; -----------------------------------------------------------------------------
 (defmethod emit ((ast ast-field-definition))
@@ -313,6 +353,7 @@
   (test-get-current-emitter-block)
   (test-append-code-to-current-emitter-block)
   (test-emit-type-definition)
+  (test-emit-value-parameter-definition)
   (test-emit-function-definition)
   (test-emit-dot-expression)
   (test-emit-return-statement)

@@ -2,6 +2,7 @@
 (in-package :fl)
 
 ;;////REVIEW: simplify this and do away with namespace entirely (make all names fully qualified)
+;;////NOTE: represent clashing definitions (like multiple definitions for the same variable) as multiple on same decl
 
 ;;;;============================================================================
 ;;;;    Symbol Tables.

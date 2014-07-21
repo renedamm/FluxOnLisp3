@@ -1,6 +1,8 @@
 
 (in-package :fl)
 
+;;////NOTE: it's actually better to not mix the tests with the normal code because tests may have completely different dependencies
+
 ;;;;============================================================================
 ;;;;    Test Framework.
 ;;;;============================================================================

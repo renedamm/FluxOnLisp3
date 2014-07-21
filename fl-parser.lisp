@@ -107,13 +107,62 @@
                 (combine-results ,@checks))))))))
 
 ;; -----------------------------------------------------------------------------
+(defun derive-definition-name-from-type (type-ast)
+  (cond
+
+    ((typep type-ast 'ast-named-type)
+     (ast-type-name type-ast))
+        
+    (t
+     (not-implemented (format nil "deriving names from ~a ASTs" (class-of type-ast))))))
+
+(deftest test-derive-definition-name-from-type-simple ()
+  (let ((id (derive-definition-name-from-type
+              (make-instance 'ast-named-type
+                             :name (make-identifier 'Foobar)))))
+    (test-equal "FOOBAR" (symbol-name (ast-id-name id)))))
+
+(deftest test-derive-definition-name-from-type ()
+  (test-derive-definition-name-from-type-simple))
+
+;; -----------------------------------------------------------------------------
 (defun insert-declaration-into-symbol-table (declaration-kind ast &key (scope-index 0))
-  (let ((declaration (find-or-create-declaration
-                       (get-current-scope :index scope-index)
-                       declaration-kind
-                       (ast-definition-name ast))))
-    (add-definition declaration ast)))
+  ;; Definition AST must have name or type or both.
+  (assert (or (ast-definition-type ast)
+              (ast-definition-name ast)))
+  (let ((name (ast-definition-name ast)))
+    ;; If it doesn't have a name, derive it from the type.
+    (if (not name)
+      (setf name (derive-definition-name-from-type (ast-definition-type ast))))
+    ;; Get the declaration.
+    (let ((declaration (find-or-create-declaration
+                         (get-current-scope :index scope-index)
+                         declaration-kind
+                         name)))
+      ;; And add the definition.
+      (add-definition declaration ast))))
   
+(deftest test-insert-declaration-into-symbol-table-without-name ()
+  (with-new-scope
+    (let ((declaration (insert-declaration-into-symbol-table
+                         *declaration-kind-variable*
+                         (make-instance 'ast-variable-definition
+                                        :name nil
+                                        :type (make-instance 'ast-named-type
+                                                             :name (make-identifier 'Foobar))))))
+      (test-equal "Foobar" (symbol-name (declaration-name declaration)))
+      (test-same declaration (find-or-create-declaration
+                               (get-current-scope)
+                               *declaration-kind-variable*
+                               (make-identifier 'Foobar))))))
+
+(deftest test-insert-declaration-into-symbol-table ()
+  (test-insert-declaration-into-symbol-table-without-name))
+
+;; -----------------------------------------------------------------------------
+(defsuite test-parser-helpers ()
+  (test-derive-definition-name-from-type))
+
 ;;;;============================================================================
 ;;;;    Parser Actions.
 ;;;;============================================================================
@@ -139,6 +188,7 @@
 (parse-action-for-definition ast-method-definition *declaration-kind-function*)
 (parse-action-for-definition ast-module-definition *declaration-kind-module*)
 (parse-action-for-definition ast-variable-definition *declaration-kind-variable*)
+(parse-action-for-definition ast-value-parameter-definition *declaration-kind-variable*)
 
 ;;;;============================================================================
 ;;;;    Parsers.
@@ -636,7 +686,7 @@
                     (make-source-region start-position scanner)
                     :attributes attributes
                     :modifiers (parse-result-match-value-or modifiers nil)
-                    :name identifier
+                    :name (parse-result-match-value-or identifier nil)
                     :type type
                     :value value))))
 
@@ -683,36 +733,67 @@
 ;; -----------------------------------------------------------------------------
 (defun parse-statement (scanner)
   (let ((saved-position (scanner-position scanner)))
-    (cond ((scanner-match-keyword scanner "return")
-           (parse-whitespace scanner)
-           (let (expression)
-             (if (not (scanner-match scanner #\;))
-                 (progn
-                   (setf expression (parse-expression scanner))
-                   (if (parse-result-no-match-p expression)
-                       (not-implemented "parse error; expecting expression after 'return'"))
-                   (if (not (scanner-match scanner #\;))
-                       (not-implemented "parse error; expecting ';'"))))
-             (parse-result-match (parse-action 'ast-return-statement
-                                               (make-source-region saved-position scanner)
-                                               :expression (parse-result-value expression)))))
-          (t
-           (parse-result-no-match)))))
+    (if (scanner-at-end-p scanner)
+      (return-from parse-statement (parse-result-no-match)))
+    (cond
 
-(deftest test-parse-return-statement ()
+      ;; Parse return statement.
+      ((scanner-match-keyword scanner "return")
+       (parse-whitespace scanner)
+       (let (expression)
+         (if (not (scanner-match scanner #\;))
+           (progn
+             (setf expression (parse-expression scanner))
+             (if (parse-result-no-match-p expression)
+               (not-implemented "parse error; expecting expression after 'return'"))
+             (if (not (scanner-match scanner #\;))
+               (not-implemented "parse error; expecting ';'"))))
+         (parse-result-match
+           (parse-action 'ast-return-statement
+                         (make-source-region saved-position scanner)
+                         :expression (parse-result-value expression)))))
+
+      ;; Parse block statement.
+      ((equal #\{ (scanner-peek-next scanner))
+       (with-new-scope
+         (let ((statements (parse-statement-list scanner)))
+           (if (not (parse-result-match-p statements))
+             (not-implemented "parse error in statement list"))
+           (parse-result-match
+             (parse-action 'ast-block-statement
+                           (make-source-region saved-position scanner)
+                           :statements (parse-result-value statements)
+                           :scope (get-current-scope))))))
+
+      (t
+       (parse-result-no-match)))))
+
+(deftest test-parse-statement-return-without-value ()
   (test-parser parse-statement "return ;" :is-match-p t :expected-type 'ast-return-statement))
 
+(deftest test-parse-statement-empty-block ()
+  (test-parser parse-statement "{}"
+               :is-match-p t
+               :expected-type 'ast-block-statement))
+
+(deftest test-parse-statement-simple-block ()
+  (test-parser parse-statement "{ return 1; }"
+               :is-match-p t
+               :expected-type 'ast-block-statement
+               :checks ((test-equal 1 (length (ast-list-nodes (get-statements ast)))))))
+
 (deftest test-parse-statement ()
-  (test-parse-return-statement))
+  (test-parse-statement-return-without-value)
+  (test-parse-statement-empty-block)
+  (test-parse-statement-simple-block))
 
 ;; -----------------------------------------------------------------------------
 ;; Parse a list of statements surrounded by '{' and '}'.
 (defun parse-statement-list (scanner)
-  (with-new-scope
-    (let ((result (parse-list parse-statement scanner :start-delimiter #\{ :end-delimiter #\})))
-      (if (parse-result-match-p result)
-        (setf (get-local-scope result) (get-current-scope)))
-      result)))
+  (let ((result (parse-list parse-statement scanner :start-delimiter #\{ :end-delimiter #\})))
+    (if (parse-result-match-p result)
+      (setf (get-local-scope result) (get-current-scope)))
+    result))
 
 (deftest test-parse-statement-list-empty ()
   (test-parser parse-statement-list "{}"
@@ -936,39 +1017,42 @@
     (parse-whitespace scanner)
     (setf name (parse-identifier scanner))
 
-    ;; Parse type parameters.
-    (setf type-parameters (parse-type-parameter-list scanner))
+    ;; Enter local scope for bindings belonging to the definition.
+    (with-new-scope
     
-    ;; Parse value parameters.
-    (setf value-parameters (parse-value-parameter-list scanner))
+      ;; Parse type parameters.
+      (setf type-parameters (parse-type-parameter-list scanner))
 
-    ;; Parse type.
-    (parse-whitespace scanner)
-    (if (scanner-match scanner #\:)
+      ;; Parse value parameters.
+      (setf value-parameters (parse-value-parameter-list scanner))
+
+      ;; Parse type.
+      (parse-whitespace scanner)
+      (if (scanner-match scanner #\:)
         (progn
           (parse-whitespace scanner)
           (setf type (parse-type scanner))))
 
-    ;; Parse clauses.
-    (setf clauses (parse-clause-list scanner))
+      ;; Parse clauses.
+      (setf clauses (parse-clause-list scanner))
 
-    ;; Parse body/value.
-    (parse-whitespace scanner)
-    (cond ((scanner-match scanner #\;)
-           t)
-          ;;////TODO: if it's a type definition, we need to parse a type here when hitting '='
-          ((scanner-match scanner #\=)
-           (parse-whitespace scanner)
-           (setf value (parse-expression scanner))
-           (parse-whitespace scanner)
-           (if (not (scanner-match scanner #\;))
+      ;; Parse body/value.
+      (parse-whitespace scanner)
+      (cond ((scanner-match scanner #\;)
+             t)
+            ;;////TODO: if it's a type definition, we need to parse a type here when hitting '='
+            ((scanner-match scanner #\=)
+             (parse-whitespace scanner)
+             (setf value (parse-expression scanner))
+             (parse-whitespace scanner)
+             (if (not (scanner-match scanner #\;))
                (not-implemented "parse error; expecting semicolon")))
-          (t
-           (setf body
-                 ;;////FIXME: this should be unified into one single parsing path for both module and other definitions
-                 (if (eq 'ast-module-definition definition-class)
+            (t
+             (setf body
+                   ;;////FIXME: this should be unified into one single parsing path for both module and other definitions
+                   (if (eq 'ast-module-definition definition-class)
                      (parse-definition-list scanner)
-                     (parse-statement-list scanner)))))
+                     (parse-statement-list scanner))))))
 
     ;; Create AST node.
     (setf ast (parse-action definition-class
@@ -976,8 +1060,8 @@
                             :attributes attributes
                             :modifiers (parse-result-match-value-or modifiers nil)
                             :name name
-                            :type-parameters type-parameters
-                            :value-parameters value-parameters
+                            :type-parameters (parse-result-match-value-or type-parameters nil)
+                            :value-parameters (parse-result-match-value-or value-parameters nil)
                             :type type
                             :clauses clauses
                             :value value
@@ -985,18 +1069,29 @@
 
     (parse-result-match ast)))
 
-(deftest test-parse-definition-simple-type ()
+(deftest test-parse-definition-type-simple ()
   (test-parser parse-definition "type Foobar;"
                :is-match-p t :expected-type 'ast-type-definition
-               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast))))))
+               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast)))
+                        (test (lookup-declaration *declaration-kind-type*
+                                                  (make-identifier (make-declaration-name "Foobar")))))))
 
-(deftest test-parse-definition-simple-function ()
+(deftest test-parse-definition-function-simple ()
   (test-parser parse-definition "function Foobar : () -> () {}"
                :is-match-p t
                :expected-type 'ast-function-definition
-               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast))))))
+               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast)))
+                        (test-equal nil (ast-definition-value-parameters ast))
+                        (test-equal nil (ast-definition-type-parameters ast)))))
 
-(deftest test-parse-definition-simple-module ()
+(deftest test-parse-definition-method-with-arguments ()
+  (test-parser parse-definition "method Foobar( Foo : Integer ) {}"
+               :is-match-p t
+               :expected-type 'ast-method-definition
+               :checks ((test-equal "Foobar" (identifier-to-string (ast-definition-name ast)))
+                        (test-equal 1 (length (ast-list-nodes (ast-definition-value-parameters ast)))))))
+
+(deftest test-parse-definition-module-simple ()
   (test-parser parse-definition "module Foobar {}"
                :is-match-p t
                :expected-type 'ast-module-definition
@@ -1006,18 +1101,18 @@
   (test-parser parse-definition "Foobar" :is-match-p nil))
 
 (deftest test-parse-definition ()
-  (test-parse-definition-simple-type)
-  (test-parse-definition-simple-function)
-  (test-parse-definition-simple-module)
+  (test-parse-definition-type-simple)
+  (test-parse-definition-function-simple)
+  (test-parse-definition-method-with-arguments)
+  (test-parse-definition-module-simple)
   (test-parse-definition-rejects-non-definition))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-definition-list (scanner)
-  (with-new-scope
-    (let ((result (parse-list parse-definition scanner :start-delimiter #\{ :end-delimiter #\})))
-      (if (parse-result-match-p result)
-        (setf (slot-value (parse-result-value result) 'local-scope) (get-current-scope)))
-      result)))
+  (let ((result (parse-list parse-definition scanner :start-delimiter #\{ :end-delimiter #\})))
+    (if (parse-result-match-p result)
+      (setf (slot-value (parse-result-value result) 'local-scope) (get-current-scope)))
+    result))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-compilation-unit (scanner)

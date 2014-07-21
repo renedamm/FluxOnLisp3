@@ -163,10 +163,19 @@
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-return-statement (ast-node)
+(defclass ast-return-statement (ast-statement)
   ((expression
     :reader ast-return-expression
     :initarg :expression)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-block-statement (ast-statement)
+  ((statements
+     :reader get-statements
+     :initarg :statements)
+   (local-scope
+     :reader get-local-scope
+     :initarg :scope)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-expression (ast-node)
@@ -435,12 +444,11 @@
         (find-if (lambda (modifier) (typep modifier type)) (ast-list-nodes modifiers)))))
 
 (deftest test-definition-has-modifier-p ()
-  (let ((abstract-ast (parse-result-value
-                        (with-new-parser-state
-                          (parse-definition (make-string-scanner "abstract type Foobar;")))))
-        (plain-ast (parse-result-value
-                     (with-new-parser-state
-                       (parse-definition (make-string-scanner "type Foobar;"))))))
+  (let ((abstract-ast (make-instance 'ast-definition
+                                     :modifiers (make-instance 'ast-list
+                                                               :nodes (list (make-instance 'ast-abstract-modifier)))))
+        (plain-ast (make-instance 'ast-definition
+                                  :modifiers nil)))
     (test (definition-has-modifier-p abstract-ast 'ast-abstract-modifier))
     (test (not (definition-has-modifier-p plain-ast 'ast-abstract-modifier)))))
 
