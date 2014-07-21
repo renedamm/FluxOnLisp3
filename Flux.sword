@@ -43,12 +43,13 @@ statement ->
 
 expression ->
 	  "(" expression ")"
-	| ( identifier | "resend" ) type_arguments? value_arguments?
+	| expression type_arguments? value_arguments?
 	| expression "." identifier
 	| expression binary_operator expression
 	| unary_prefix_operator expression
 	| expression unary_postfix_operator
 	| "object" ":" type ( "{" ... "}" )?
+	| "resend"
 	| literal
 
 literal ->
@@ -89,9 +90,11 @@ value_parameters ->
 value_parameter ->
 	  ( attributes? modifier* identifier ":" )? type ( "=" expression )?
 
+////TODO: add named arguments
 type_arguments ->
 	  "<" {type:::","} ">"
 
+////TODO: add named arguments
 value_arguments ->
 	  "(" {expression:::","} ")"
 

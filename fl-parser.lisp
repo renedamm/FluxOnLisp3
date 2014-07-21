@@ -746,6 +746,7 @@
              (setf expression (parse-expression scanner))
              (if (parse-result-no-match-p expression)
                (not-implemented "parse error; expecting expression after 'return'"))
+             (parse-whitespace scanner)
              (if (not (scanner-match scanner #\;))
                (not-implemented "parse error; expecting ';'"))))
          (parse-result-match
@@ -814,6 +815,22 @@
   (test-parse-statement-list-empty)
   (test-parse-statement-list-no-match)
   (test-parse-statement-list-simple))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type-argument (scanner)
+  (parse-type scanner))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type-argument-list (scanner)
+  (parse-list parse-type-argument scanner :start-delimiter #\{ :end-delimiter #\} :separator #\,))
+
+;; -----------------------------------------------------------------------------
+(defun parse-value-argument (scanner)
+  (parse-expression scanner))
+
+;; -----------------------------------------------------------------------------
+(defun parse-value-argument-list (scanner)
+  (parse-list parse-value-argument scanner :start-delimiter #\( :end-delimiter #\) :separator #\,))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-character (scanner)
@@ -913,39 +930,86 @@
   
     ;; Parse core expression.
     (let ((next-char (scanner-peek-next scanner)))
-      (setf expression (cond ((or (digit-char-p next-char)
-                                  (char-equal #\" next-char)
-                                  (char-equal #\' next-char))
-                              (parse-literal scanner))
-                             (t
-                              (parse-result-no-match)))))
+      (setf expression (cond
+
+                         ;; Parse name expression.
+                         ((or (alpha-char-p next-char)
+                              (equal #\_ next-char))
+                          (let ((id (parse-identifier scanner)))
+                            (if (not (parse-result-match-p id))
+                              (not-implemented "expecting name"))
+                            (parse-result-match
+                              (parse-action 'ast-name-expression
+                                            (make-source-region start-pos scanner)
+                                            :name (parse-result-value id)))))
+
+                         ;; Parse literal.
+                         ((or (digit-char-p next-char)
+                              (char-equal #\" next-char)
+                              (char-equal #\' next-char))
+                          (parse-literal scanner))
+
+                         (t
+                          (parse-result-no-match)))))
   
     ;; Parse postfix.
     (loop
       named parse-postfix
       do (parse-whitespace scanner)
-         (cond
+         (if (not (scanner-at-end-p scanner))
+           (let ((next-char (scanner-peek-next scanner)))
+             (cond
 
-           ;; Parse dot expression.
-           ((scanner-match scanner #\.)
-            (parse-whitespace scanner)
-            (let ((name (parse-identifier scanner)))
-              (if (not (parse-result-match-p name))
-                (not-implemented "expecting identifier after '.'"))
-              (setf expression (parse-result-value
-                                 (parse-action 'ast-dot-expression
-                                                (make-source-region start-pos (scanner-position scanner))
-                                                :value (parse-result-value expression)
-                                                :member name)))))
+               ;; Parse call expression.
+               ((or (equal #\( next-char)
+                    (equal #\< next-char))
+                (let ((type-arguments (if (equal #\< next-char)
+                                        (progn
+                                          (parse-type-argument-list scanner)
+                                          (parse-whitespace scanner)
+                                          (if (not (scanner-at-end-p scanner))
+                                            (setf next-char (scanner-peek-next scanner))
+                                            (setf next-char nil)))
+                                        nil))
+                      (value-arguments (if (equal #\( next-char)
+                                         (parse-value-argument-list scanner)
+                                         nil)))
+                  (setf expression
+                        (parse-result-value
+                          (parse-action 'ast-call-expression
+                                        (make-source-region start-pos scanner)
+                                        :callee (parse-result-value expression)
+                                        :type-arguments (parse-result-match-value-or type-arguments nil)
+                                        :value-arguments (parse-result-match-value-or value-arguments nil))))))
+               
+               ;; Parse dot expression.
+               ((equal #\. next-char)
+                (scanner-read-next scanner)
+                (parse-whitespace scanner)
+                (let ((name (parse-identifier scanner)))
+                  (if (not (parse-result-match-p name))
+                    (not-implemented "expecting identifier after '.'"))
+                  (setf expression (parse-result-value
+                                     (parse-action 'ast-dot-expression
+                                                   (make-source-region start-pos scanner)
+                                                   :value (parse-result-value expression)
+                                                   :member name)))))
 
-           (t
-            (return-from parse-postfix))))
+               (t
+                (return-from parse-postfix))))
+           (return-from parse-postfix)))
     
     expression))
 
 (deftest test-parse-expression-literal ()
   (test-parser parse-expression "512" :is-match-p t :expected-type 'ast-integer-literal
                :checks ((test-equal 512 (ast-literal-value ast)))))
+
+(deftest test-parse-expression-named ()
+  (test-parser parse-expression "foo"
+               :is-match-p t
+               :expected-type 'ast-name-expression
+               :checks ((test-equal "foo" (identifier-to-string (get-identifier ast))))))
 
 (deftest test-parse-expression-dot-simple ()
   (test-parser parse-expression "1.foo"
@@ -962,10 +1026,19 @@
                         (test-equal "bar" (symbol-name (ast-id-name (get-member-name ast))))
                         (test-type 'ast-integer-literal (get-value-expression (get-value-expression ast))))))
 
+(deftest test-parse-expression-call-simple ()
+  (test-parser parse-expression "foo()"
+               :is-match-p t
+               :expected-type 'ast-call-expression
+               :checks ((test-type 'ast-name-expression (get-callee-expression ast))
+                        (test-same nil (get-type-arguments ast))
+                        (test-equal 0 (length (ast-list-nodes (get-value-arguments ast)))))))
+
 (deftest test-parse-expression ()
   (test-parse-expression-literal)
   (test-parse-expression-dot-simple)
-  (test-parse-expression-dot-multiple))
+  (test-parse-expression-dot-multiple)
+  (test-parse-expression-call-simple))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-definition (scanner)

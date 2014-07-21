@@ -182,6 +182,12 @@
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-name-expression (ast-expression)
+  ((name
+     :reader get-identifier
+     :initarg :name)))
+
+;; -----------------------------------------------------------------------------
 (defclass ast-literal-expression (ast-expression)
   ((value
     :reader ast-literal-value
@@ -227,6 +233,18 @@
      :reader get-member-name
      :initarg :member
      :documentation "Right side ASTIdentifier denoting 'member' name.")))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-call-expression (ast-expression)
+  ((callee-expression
+     :reader get-callee-expression
+     :initarg :callee)
+   (type-arguments
+     :reader get-type-arguments
+     :initarg :type-arguments)
+   (value-arguments
+     :reader get-value-arguments
+     :initarg :value-arguments)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-type (ast-node)
