@@ -1,16 +1,12 @@
 This directory contains a source-to-source translator that recognizes a subset of Flux and translates
 it to Lisp code.
 
-Due to it being "just" a source-to-source translator, this program operates in a somewhat simplified
-manner compared to the "real" Flux compiler.  It has no intermediate representation and instead
-stores what semantic information it needs directly on the AST.
+Albeit being a source-to-source translator, this program goes through a full AST->IR->output transformation
+process rather than trying to translate directly from AST to output.  I tried the latter approach first
+and found that I still know to little about all the things it takes to translate Flux to take shortcuts.
+This also shows in that some phases in the compiler could be combined, but without knowing how things work
+exactly, trying to attempt this up-front turned out to be premature optimization that caused many problems.
 
-## Restrictions
-
-   * Modules and imports are completely ignored.  Everything is pretended to be defined at the global
-     level.
-   * Pretty much no checking is performed.  Errors will usually show only when running the generated
-     Lisp code.
-   * The compiler operates very differently from "the real thing" in that it goes straight from ASTs
-     to generated code without employing an intermediate representation (as appropriate for a source-
-	 to-source translator but not very appropriate for a real compiler).
+This shows, for example, in the parsing step that only produces an AST and does not attempt any symbol table
+operations.  This requires re-scanning the AST to a certain degree later in order to discover definitions
+that could have already been discoverd during the parsing step.

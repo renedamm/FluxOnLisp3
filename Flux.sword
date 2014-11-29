@@ -17,6 +17,7 @@ definition_keyword ->
     | "module"
     | "features"
     | "namespace"
+	| "operation"
     | "local"
 
 definition_body ->

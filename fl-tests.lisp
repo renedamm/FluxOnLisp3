@@ -1,19 +1,24 @@
 
 (in-package :fl)
 
+;;////TODO: replace this with using one of the stock Lisp unit test libraries
 ;;////NOTE: it's actually better to not mix the tests with the normal code because tests may have completely different dependencies
 
 ;;;;============================================================================
-;;;;    Test Framework.
+;;;;    Globals.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-;////TODO: turn this into a stack and print suites/tests as we enter them (instead of for each single test)
+;;////TODO: turn this into a stack and print suites/tests as we enter them (instead of for each single test)
 (defvar *test-name* nil)
 
 ;; -----------------------------------------------------------------------------
 ;; List of test suites.
 (defparameter *test-suites* nil)
+
+;;;;============================================================================
+;;;;    Functions.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defun report-result (result form)

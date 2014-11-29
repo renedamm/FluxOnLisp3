@@ -2,55 +2,60 @@
 (in-package :fl)
 
 ;;;;============================================================================
-;;;;    Scanners.
+;;;;    Classes.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defclass scanner ()
   ((position
-    :initform 0
-    :accessor scanner-position)))
+     :initform 0
+     :reader get-position
+     :writer set-position)))
 
 ;; -----------------------------------------------------------------------------
 (defclass string-scanner (scanner)
   ((string
-    :initarg :string
-    :initform "")))
+     :initarg :string
+     :initform "")))
 
 ;; -----------------------------------------------------------------------------
 (defclass stream-scanner (scanner)
   ((stream
-    :initarg :stream)
+     :initarg :stream)
    (stream-length
-    :initarg :length)))
+     :initarg :length)))
+
+;;;;============================================================================
+;;;;    Functions.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defgeneric scanner-at-end-p (scanner))
+(defgeneric is-at-end-p (scanner))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric scanner-peek-next (scanner))
+(defgeneric peek-next-token (scanner))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric scanner-read-next (scanner))
+(defgeneric read-next-token (scanner))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric scanner-match (scanner token))
+(defgeneric match-next-token (scanner token))
 
 ;; -----------------------------------------------------------------------------
-(defgeneric scanner-match-if (scanner function))
+(defgeneric match-next-token-if (scanner function))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-match ((scanner scanner) token)
-  (cond ((scanner-at-end-p scanner) nil)
-        ((equal (scanner-peek-next scanner) token)
-         (scanner-read-next scanner)
+(defmethod match-next-token ((scanner scanner) token)
+  (cond ((is-at-end-p scanner) nil)
+        ((equal (peek-next-token scanner) token)
+         (read-next-token scanner)
          t)
         (t nil)))
 
-(deftest test-scanner-match ()
+(deftest test-match-next-token ()
   (let ((scanner (make-stream-scanner "foo")))
-    (test (scanner-match scanner #\f))
-    (test (not (scanner-match scanner #\b)))))
+    (test (match-next-token scanner #\f))
+    (test (not (match-next-token scanner #\b)))))
 
 ;; -----------------------------------------------------------------------------
 (defun make-stream-scanner (stream &key length)
@@ -66,161 +71,161 @@
       (setf (slot-value instance 'stream-length) (file-length (slot-value instance 'stream)))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-at-end-p ((scanner stream-scanner))
+(defmethod is-at-end-p ((scanner stream-scanner))
   (>= (slot-value scanner 'position)
       (slot-value scanner 'stream-length)))
 
-(deftest test-stream-scanner-at-end-p ()
+(deftest test-stream-scanner-is-at-end-p ()
   (let ((scanner (make-stream-scanner "")))
-    (test (scanner-at-end-p scanner))))
+    (test (is-at-end-p scanner))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-peek-next ((scanner stream-scanner))
+(defmethod peek-next-token ((scanner stream-scanner))
   (peek-char nil (slot-value scanner 'stream)))
 
-(deftest test-stream-scanner-peek-next ()
+(deftest test-stream-scanner-peek-next-token ()
   (let ((scanner (make-stream-scanner "foo")))
-    (test-equal (scanner-peek-next scanner) #\f)))
+    (test-equal (peek-next-token scanner) #\f)))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-read-next ((scanner stream-scanner))
+(defmethod read-next-token ((scanner stream-scanner))
   (let ((char (read-char (slot-value scanner 'stream))))
     (incf (slot-value scanner 'position))
     char))
 
-(deftest test-stream-scanner-read-next ()
+(deftest test-stream-scanner-read-next-token ()
   (let ((scanner (make-stream-scanner "foo")))
-    (test-equal (scanner-read-next scanner) #\f)))
+    (test-equal (read-next-token scanner) #\f)))
 
 ;; -----------------------------------------------------------------------------
 (defun make-string-scanner (string)
   (make-instance 'string-scanner :string string))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-at-end-p ((scanner string-scanner))
+(defmethod is-at-end-p ((scanner string-scanner))
   (equal (slot-value scanner 'position)
          (length (slot-value scanner 'string))))
 
-(deftest test-string-scanner-at-end-p ()
-  (test (not (scanner-at-end-p (make-string-scanner "foo"))))
-  (test (scanner-at-end-p (make-string-scanner ""))))
+(deftest test-string-scanner-is-at-end-p ()
+  (test (not (is-at-end-p (make-string-scanner "foo"))))
+  (test (is-at-end-p (make-string-scanner ""))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-peek-next ((scanner string-scanner))
+(defmethod peek-next-token ((scanner string-scanner))
   (elt (slot-value scanner 'string)
        (slot-value scanner 'position)))
 
-(deftest test-string-scanner-peek-next ()
+(deftest test-string-scanner-peek-next-token ()
   (let ((scanner (make-string-scanner "foo")))
-    (test (equal (scanner-peek-next scanner) #\f))
-    (test (equal (scanner-position scanner) 0))))
+    (test (equal (peek-next-token scanner) #\f))
+    (test (equal (get-position scanner) 0))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-read-next ((scanner string-scanner))
-  (let ((token (scanner-peek-next scanner)))
+(defmethod read-next-token ((scanner string-scanner))
+  (let ((token (peek-next-token scanner)))
     (incf (slot-value scanner 'position))
     token))
 
-(deftest test-string-scanner-read-next ()
+(deftest test-string-scanner-read-next-token ()
   (let ((scanner (make-string-scanner "foo")))
-    (test (equal (scanner-read-next scanner) #\f))
-    (test (equal (scanner-position scanner) 1))))
+    (test (equal (read-next-token scanner) #\f))
+    (test (equal (get-position scanner) 1))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-match ((scanner string-scanner) char)
+(defmethod match-next-token ((scanner string-scanner) char)
   (cond
-    ((scanner-at-end-p scanner) nil)
-    ((equal (scanner-peek-next scanner) char)
+    ((is-at-end-p scanner) nil)
+    ((equal (peek-next-token scanner) char)
      (incf (slot-value scanner 'position))
      t)
     (t nil)))
 
-(deftest test-string-scanner-match ()
-  (test (scanner-match (make-string-scanner "foo") #\f))
-  (test (not (scanner-match (make-string-scanner "foo") #\b)))
-  (test (not (scanner-match (make-string-scanner "") #\f))))
+(deftest test-string-scanner-match-next-token ()
+  (test (match-next-token (make-string-scanner "foo") #\f))
+  (test (not (match-next-token (make-string-scanner "foo") #\b)))
+  (test (not (match-next-token (make-string-scanner "") #\f))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod scanner-match-if ((scanner string-scanner) function)
+(defmethod match-next-token-if ((scanner string-scanner) function)
   (cond
-    ((scanner-at-end-p scanner) nil)
-    ((funcall function (scanner-peek-next scanner))
+    ((is-at-end-p scanner) nil)
+    ((funcall function (peek-next-token scanner))
      (incf (slot-value scanner 'position)))
     (t nil)))
 
-(deftest test-string-scanner-match-if ()
-  (test (scanner-match-if (make-string-scanner "foo" ) (lambda (char) (declare (ignore char)) t)))
-  (test (not (scanner-match-if (make-string-scanner "foo") (lambda (char) (declare (ignore char)) nil)))))
+(deftest test-string-scanner-match-next-token-if ()
+  (test (match-next-token-if (make-string-scanner "foo" ) (lambda (char) (declare (ignore char)) t)))
+  (test (not (match-next-token-if (make-string-scanner "foo") (lambda (char) (declare (ignore char)) nil)))))
 
 ;; -----------------------------------------------------------------------------
-(defun scanner-match-sequence (scanner token-list)
-  (let ((saved-position (scanner-position scanner)))
-    (if (every (lambda (token) (scanner-match scanner token)) token-list)
+(defun match-token-sequence (scanner token-list)
+  (let ((saved-position (get-position scanner)))
+    (if (every (lambda (token) (match-next-token scanner token)) token-list)
         t
         (progn
-          (setf (scanner-position scanner) saved-position)
+          (set-position saved-position scanner)
           nil))))
 
-(deftest test-scanner-match-sequence ()
+(deftest test-match-token-sequence ()
   (let ((scanner (make-string-scanner "foo")))
-    (test (not (scanner-match-sequence scanner "bar")))
-    (test-equal 0 (scanner-position scanner)))
+    (test (not (match-token-sequence scanner "bar")))
+    (test-equal 0 (get-position scanner)))
   (let ((scanner (make-string-scanner "foobar")))
-    (test (scanner-match-sequence scanner "foo"))
-    (test-equal 3 (scanner-position scanner))))
+    (test (match-token-sequence scanner "foo"))
+    (test-equal 3 (get-position scanner))))
 
 ;; -----------------------------------------------------------------------------
-(defun scanner-match-keyword (scanner token-list)
-  (let ((saved-position (scanner-position scanner)))
-    (if (and (scanner-match-sequence scanner token-list)
-             (or (scanner-at-end-p scanner)
-                 (let ((next-char (scanner-peek-next scanner)))
+(defun match-keyword (scanner token-list)
+  (let ((saved-position (get-position scanner)))
+    (if (and (match-token-sequence scanner token-list)
+             (or (is-at-end-p scanner)
+                 (let ((next-char (peek-next-token scanner)))
                    (and (not (alphanumericp next-char))
                         (not (equal next-char #\_))))))
         t
         (progn
-          (setf (scanner-position scanner) saved-position)
+          (set-position saved-position scanner)
           nil))))
 
-(deftest test-scanner-match-keyword ()
+(deftest test-match-keyword ()
   (let ((scanner (make-string-scanner "foobar")))
-    (test (not (scanner-match-keyword scanner "foo")))
-    (test-equal 0 (scanner-position scanner)))
+    (test (not (match-keyword scanner "foo")))
+    (test-equal 0 (get-position scanner)))
   (let ((scanner (make-string-scanner "foobar ")))
-    (test (scanner-match-keyword scanner "foobar"))
-    (test-equal 6 (scanner-position scanner)))
+    (test (match-keyword scanner "foobar"))
+    (test-equal 6 (get-position scanner)))
   (let ((scanner (make-string-scanner "foo")))
-    (test (scanner-match-keyword scanner "foo"))
-    (test-equal 3 (scanner-position scanner)))
+    (test (match-keyword scanner "foo"))
+    (test-equal 3 (get-position scanner)))
   (let ((scanner (make-string-scanner "foo_")))
-    (test (not (scanner-match-keyword scanner "foo")))))
+    (test (not (match-keyword scanner "foo")))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod (setf scanner-position) :before (position (scanner string-scanner))
+(defmethod set-position :before (position (scanner string-scanner))
   (if (or (< position 0)
           (> position (length (slot-value scanner 'string))))
       (error (format nil "Position ~a out of range for string ~a used by string-scanner!"
                      position
                      (slot-value scanner 'string)))))
 
-(deftest test-string-scanner-setf-position ()
+(deftest test-string-scanner-set-position ()
   (let ((scanner (make-string-scanner "foo")))
-    (setf (scanner-position scanner) 0)
-    (test-equal 0 (scanner-position scanner))
-    (setf (scanner-position scanner) 3)
-    (test-equal 3 (scanner-position scanner))))
+    (set-position 0 scanner)
+    (test-equal 0 (get-position scanner))
+    (set-position 3 scanner)
+    (test-equal 3 (get-position scanner))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-scanners ()
-  (test-scanner-match)
-  (test-scanner-match-sequence)
-  (test-scanner-match-keyword)
-  (test-stream-scanner-at-end-p)
-  (test-stream-scanner-peek-next)
-  (test-string-scanner-at-end-p)
-  (test-string-scanner-peek-next)
-  (test-string-scanner-read-next)
-  (test-string-scanner-match)
-  (test-string-scanner-match-if)
-  (test-string-scanner-setf-position))
+  (test-match-next-token)
+  (test-match-token-sequence)
+  (test-match-keyword)
+  (test-stream-scanner-is-at-end-p)
+  (test-stream-scanner-peek-next-token)
+  (test-string-scanner-is-at-end-p)
+  (test-string-scanner-peek-next-token)
+  (test-string-scanner-read-next-token)
+  (test-string-scanner-match-next-token)
+  (test-string-scanner-match-next-token-if)
+  (test-string-scanner-set-position))
 

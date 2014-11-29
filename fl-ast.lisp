@@ -2,7 +2,7 @@
 (in-package :fl)
 
 ;;;;============================================================================
-;;;;    AST Variables.
+;;;;    Globals.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
@@ -27,32 +27,29 @@
 (defparameter *ast-minus-operator* :minus)
 
 ;;;;============================================================================
-;;;;    AST Classes.
+;;;;    Classes.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 ;; Abstract base class for AST nodes.
 (defclass ast-node ()
   ((region
-    :reader ast-source-region
-    :initarg :source-region)))
+     :reader get-source-region
+     :initarg :source-region)))
 
 ;; -----------------------------------------------------------------------------
 ;; Node representing a parse error in the syntax tree.
 (defclass ast-error (ast-node)
   ((diagnostic
-    :reader ast-error-diagnostic
-    :initarg :diagnostic)))
+     :reader get-diagnostic
+     :initarg :diagnostic)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-list (ast-node)
   ((nodes
-    :reader ast-list-nodes
-    :initarg :nodes
-    :initform nil)
-   (local-scope
-     :accessor get-local-scope
-     :initarg :local-scope)))
+     :reader get-list
+     :initarg :nodes
+     :initform nil)))
 
 ;; -----------------------------------------------------------------------------
 ;; Representation of "::" denoting the global namespace.
@@ -64,15 +61,15 @@
 ;; A (potentially qualified) identifier.
 (defclass ast-identifier (ast-node)
   ((qualifier
-    :reader ast-id-qualifier
-    :initarg :qualifier
-    :initform nil)
+     :reader get-qualifier
+     :initarg :qualifier
+     :initform nil)
    (name
-    :reader ast-id-name
-    :initarg :name)))
+     :reader get-name
+     :initarg :name)))
 
 (defmethod initialize-instance :after ((id ast-identifier) &key)
-  (let ((name (ast-id-name id)))
+  (let ((name (get-name id)))
     (if (not (symbolp name))
       (error (format nil "Expecting symbol for name of identifier but got '~a' instead." name)))))
 
@@ -135,8 +132,8 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-clause (ast-node)
   (expression
-   :reader ast-contract-expression
-   :initarg :expression))
+    :reader get-clause-expression
+    :initarg :expression))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-contract-clause (ast-clause)
@@ -165,17 +162,14 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-return-statement (ast-statement)
   ((expression
-    :reader ast-return-expression
-    :initarg :expression)))
+     :reader get-return-expression
+     :initarg :expression)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-block-statement (ast-statement)
   ((statements
      :reader get-statements
-     :initarg :statements)
-   (local-scope
-     :reader get-local-scope
-     :initarg :scope)))
+     :initarg :statements)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-expression (ast-node)
@@ -190,8 +184,8 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-literal-expression (ast-expression)
   ((value
-    :reader ast-literal-value
-    :initarg :value)))
+     :reader get-literal-value
+     :initarg :value)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-character-literal (ast-literal-expression)
@@ -204,9 +198,9 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-integer-literal (ast-literal-expression)
   ((type
-    :reader ast-integer-type
-    :initarg :type
-    :initform 'integer)))
+     :reader get-integer-type
+     :initarg :type
+     :initform 'integer)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-float-literal (ast-literal-expression)
@@ -215,11 +209,11 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-operator-expression (ast-expression)
   ((operator
-     :reader ast-operator
+     :reader get-operator
      :initarg :operator
      :documentation "Keyword symbol for operator.")
    (operands
-     :reader ast-operands
+     :reader get-operands
      :initarg :operands
      :documentation "List of operand ASTs.")))
 
@@ -249,8 +243,8 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-type (ast-node)
   ((modifiers
-    :reader ast-type-modifiers
-    :initarg :modifiers)))
+     :reader get-modifiers
+     :initarg :modifiers)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-special-type (ast-type)
@@ -263,18 +257,18 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-named-type (ast-type)
   ((name
-    :reader ast-type-name
-    :initarg :name)
+     :reader get-type-name
+     :initarg :name)
    type-arguments))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-combination-type (ast-type)
   ((left-type
-    :reader ast-type-left
-    :initarg :left-type)
+     :reader get-left-type
+     :initarg :left-type)
    (right-type
-    :reader ast-type-right
-    :initarg :right-type)))
+     :reader get-right-type
+     :initarg :right-type)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-function-type (ast-combination-type)
@@ -291,34 +285,32 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-definition (ast-node)
   ((attributes
-     :reader ast-definition-attributes
+     :reader get-attributes
      :initarg :attributes)
    (modifiers
-     :reader ast-definition-modifiers
+     :reader get-modifiers
      :initarg :modifiers)
    (name
-     :reader ast-definition-name
+     :reader get-identifier
      :initarg :name)
    (type-parameters
-     :reader ast-definition-type-parameters
+     :reader get-type-parameters
      :initarg :type-parameters)
    (value-parameters
-     :reader ast-definition-value-parameters
+     :reader get-value-parameters
      :initarg :value-parameters)
    (clauses
-     :reader ast-definition-clauses
+     :reader get-clauses
      :initarg :clauses)
    (type
-     :reader ast-definition-type
+     :reader get-type
      :initarg :type)
    (value
-     :reader ast-definition-value
+     :reader get-value
      :initarg :value)
    (body
-     :reader ast-definition-body
-     :initarg :body)
-   (declaration
-     :accessor ast-definition-declaration)))
+     :reader get-body
+     :initarg :body)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-type-definition (ast-definition)
@@ -363,11 +355,11 @@
 ;; -----------------------------------------------------------------------------
 (defclass ast-compilation-unit (ast-node)
   ((definitions
-     :reader ast-unit-definitions
+     :reader get-definitions
      :initarg :definitions)))
 
 ;;;;============================================================================
-;;;;    AST Helpers.
+;;;;    Functions.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
@@ -376,17 +368,9 @@
     (princ (identifier-to-string object) stream)))
 
 ;; -----------------------------------------------------------------------------
-(defmethod get-local-scope ((ast ast-compilation-unit))
-  (get-local-scope (ast-unit-definitions ast)))
-
-;; -----------------------------------------------------------------------------
-(defmethod get-local-scope ((ast ast-definition))
-  (get-local-scope (ast-definition-body ast)))
-
-;; -----------------------------------------------------------------------------
 (defun make-ast-error (diagnostic)
   (make-instance 'ast-error
-                 :source-region (diagnostic-source-region diagnostic)
+                 :source-region (get-diagnostic-source-region diagnostic)
                  :diagnostic diagnostic))
 
 ;; -----------------------------------------------------------------------------
@@ -403,21 +387,21 @@
 
 (deftest test-make-identifier-simple ()
   (let ((id (make-identifier 'test)))
-    (test-equal "TEST" (symbol-name (ast-id-name id)))
-    (test-equal nil (ast-id-qualifier id))))
+    (test-equal "TEST" (symbol-name (get-name id)))
+    (test-equal nil (get-qualifier id))))
 
 (deftest test-make-identifier-with-global-qualifier ()
   (let ((id (make-identifier *ast-global-qualifier-symbol* 'outer 'inner 'test)))
-    (test-equal "TEST" (symbol-name (ast-id-name id)))
-    (test-equal "INNER" (symbol-name (ast-id-name (ast-id-qualifier id))))
-    (test-equal "OUTER" (symbol-name (ast-id-name (ast-id-qualifier (ast-id-qualifier id)))))
-    (test-type 'ast-global-qualifier (ast-id-qualifier (ast-id-qualifier (ast-id-qualifier id))))))
+    (test-equal "TEST" (symbol-name (get-name id)))
+    (test-equal "INNER" (symbol-name (get-name (get-qualifier id))))
+    (test-equal "OUTER" (symbol-name (get-name (get-qualifier (get-qualifier id)))))
+    (test-type 'ast-global-qualifier (get-qualifier (get-qualifier (get-qualifier id))))))
 
 (deftest test-make-identifier-with-namespace ()
   (let ((id (make-identifier 'outer 'inner)))
-    (test-equal "INNER" (symbol-name (ast-id-name id)))
-    (test-type 'ast-identifier (ast-id-qualifier id))
-    (test-equal "OUTER" (symbol-name (ast-id-name (ast-id-qualifier id))))))
+    (test-equal "INNER" (symbol-name (get-name id)))
+    (test-type 'ast-identifier (get-qualifier id))
+    (test-equal "OUTER" (symbol-name (get-name (get-qualifier id))))))
 
 (deftest test-make-identifier ()
   (test-make-identifier-simple)
@@ -426,7 +410,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defun is-globally-qualified-p (id)
-  (let ((qualifier (ast-id-qualifier id)))
+  (let ((qualifier (get-qualifier id)))
     (cond
       ((not qualifier)
        nil)
@@ -437,29 +421,24 @@
  
 ;; -----------------------------------------------------------------------------
 (defun identifier-to-string (id)
-  (let ((qualifier (ast-id-qualifier id)))
+  (let ((qualifier (get-qualifier id)))
     (cond ((not qualifier)
-           (symbol-name (ast-id-name id)))
+           (symbol-name (get-name id)))
           ((typep qualifier 'ast-global-qualifier)
-           (concatenate 'string "::" (symbol-name (ast-id-name id))))
+           (concatenate 'string "::" (symbol-name (get-name id))))
           (t
-           (concatenate 'string (identifier-to-string qualifier) "::" (symbol-name (ast-id-name id)))))))
+           (concatenate 'string (identifier-to-string qualifier) "::" (symbol-name (get-name id)))))))
 
 (deftest test-identifier-to-string ()
   (let ((id1 (make-instance 'ast-identifier :name (intern "test"))))
     (test-equal "test" (identifier-to-string id1))))
 
 ;; -----------------------------------------------------------------------------
-;;////TODO: need to do proper symbol lookups and generate fully qualified IDs for every use
-(defun identifier-to-lisp (id)
-  (intern (identifier-to-string id)))
-
-;; -----------------------------------------------------------------------------
 (defun definition-has-modifier-p (ast type)
-  (let ((modifiers (ast-definition-modifiers ast)))
+  (let ((modifiers (get-modifiers ast)))
     (if (not modifiers)
         nil
-        (find-if (lambda (modifier) (typep modifier type)) (ast-list-nodes modifiers)))))
+        (find-if (lambda (modifier) (typep modifier type)) (get-list modifiers)))))
 
 (deftest test-definition-has-modifier-p ()
   (let ((abstract-ast (make-instance 'ast-definition

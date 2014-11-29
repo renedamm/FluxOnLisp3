@@ -1,10 +1,6 @@
 
 (in-package :fl)
 
-;;;;============================================================================
-;;;;    Diagnostics.
-;;;;============================================================================
-
 ; 1xxxx are syntax errors
 ; 2xxxx are syntax warnings
 ; 3xxxx are semantic errors
@@ -13,55 +9,52 @@
 ; 6xxxx are implementation-specific warnings
 ; 7xxxx are implementation-specific infos
 
-;; -----------------------------------------------------------------------------
-(defparameter *diagnostic-types-by-name*
-  (make-hash-table))
-
-;; -----------------------------------------------------------------------------
-(defparameter *diagnostic-types-by-code*
-  (make-hash-table))
+;;;;============================================================================
+;;;;    Classes.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defclass diagnostic-type ()
   ((code
-    :reader diagnostic-code
-    :initarg :code)
+     :reader get-diagnostic-code
+     :initarg :code)
    (name
-    :reader diagnostic-name
-    :initarg :name)
+     :reader get-diagnostic-name
+     :initarg :name)
    (format
-    :reader diagnostic-format
-    :initarg :format)))
+     :reader get-diagnostic-format
+     :initarg :format)))
 
 ;; -----------------------------------------------------------------------------
 (defclass diagnostic ()
   ((type
-    :reader diagnostic-type
-    :initarg :type)
+     :reader get-diagnostic-type
+     :initarg :type)
    (format-args
-    :reader diagnostic-args
-    :initarg :args)
+     :reader get-diagnostic-args
+     :initarg :args)
    (source
-    :reader diagnostic-source
-    :initarg :source)
+     :reader get-diagnostic-source
+     :initarg :source)
    (source-region
-    :reader diagnostic-source-region
-    :initarg :source-region)
-   (ast
-    :reader diagnostic-arg
-    :initarg :ast)))
+     :reader get-diagnostic-source-region
+     :initarg :source-region)))
 
 ;; -----------------------------------------------------------------------------
 (defclass diagnostic-collection ()
   ((diagnostics
-    :reader diagnostics
-    :initform (make-array 10 :adjustable t :fill-pointer 0))
+     :reader get-diagnostics
+     :initform (make-array 10 :adjustable t :fill-pointer 0))
    (error-count
-    :reader diagnostics-error-count
-    :initform 0)
+     :reader get-error-count
+     :initform 0)
    (warning-count
-    :reader diagnostics-warning-count
-    :initform 0)))
+     :reader get-warning-count
+     :initform 0)))
+
+;;;;============================================================================
+;;;;    Macros.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defmacro defdiagnostic-type (code name format)
@@ -73,11 +66,27 @@
      (setf (gethash ,code *diagnostic-types-by-code*) ,instance)
      (setf (gethash ',name *diagnostic-types-by-name*) ,instance))))
 
+;;;;============================================================================
+;;;;    Globals.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defparameter *diagnostic-types-by-name*
+  (make-hash-table))
+
+;; -----------------------------------------------------------------------------
+(defparameter *diagnostic-types-by-code*
+  (make-hash-table))
+
 ;; -----------------------------------------------------------------------------
 (defdiagnostic-type 10001 block-not-closed "Expecting '}'")
 (defdiagnostic-type 10002 list-not-closed "Expecting ')'")
 (defdiagnostic-type 10003 separator-missing "Expecting ','")
 (defdiagnostic-type 10004 name-missing "Expecting identifier")
+
+;;;;============================================================================
+;;;;    Functions
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defun get-diagnostic-type-by-code (code)
@@ -112,13 +121,11 @@
          (error (format nil "No diagnostic for expecting '~a'" expecting)))))
 
 ;; -----------------------------------------------------------------------------
-(defun make-diagnostic (diagnostic-type &key ast source source-region)
+(defun make-diagnostic (diagnostic-type &key source source-region)
   (cond ((numberp diagnostic-type)
          (setf diagnostic-type (get-diagnostic-type-by-code diagnostic-type)))
         ((stringp diagnostic-type)
          (setf diagnostic-type (get-diagnostic-type-by-name diagnostic-type))))
-  (if (and (not source-region) ast)
-      (setf source-region (ast-source-region ast)))
   (assert (typep diagnostic-type 'diagnostic-type))
   (make-instance 'diagnostic
                  :type diagnostic-type

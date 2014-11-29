@@ -1,4 +1,5 @@
 
+//[ Program ]
 module Test
 {
 	abstract type Object;

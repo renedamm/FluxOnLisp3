@@ -1,37 +1,37 @@
 
 (in-package :fl)
 
+;;////TODO: print-object support for ir-source
+
 ;;;;============================================================================
-;;;;    Sources.
+;;;;    Classes.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defclass source ()
+(defclass ir-source ()
   ((name
-    :reader source-name
-    :initarg :name)
+     :reader get-name
+     :initarg :name)
    (path
-    :reader source-path
-    :initarg :path)
+     :reader get-path
+     :initarg :path)
    (line-breaks
-    :reader source-line-breaks
-    :initarg :line-breaks
-    :initform (make-line-break-table))
+     :reader get-line-breaks
+     :initarg :line-breaks
+     :initform (make-line-break-table))
    (text
-    :reader source-text
-    :initarg :text)
+     :reader get-text
+     :initarg :text)
    (diagnostics
-    :reader source-diagnostics
-    :initform (make-instance 'diagnostic-collection))
+     :reader get-diagnostics
+     :initform (make-instance 'diagnostic-collection))
    (ast
-    :accessor source-ast)))
+     :reader get-ast
+     :writer set-ast)))
 
-;; -----------------------------------------------------------------------------
-(defmethod get-local-scope (source)
-  (let ((ast (source-ast source)))
-    (if (not ast)
-      nil
-      (get-local-scope ast))))
+;;;;============================================================================
+;;;;    Functions.
+;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defun make-source (code &key name path)
@@ -42,15 +42,67 @@
         (setf code (read-string code))))
   (if (and (not name) path)
       (setf name (pathname-name path)))
-  (make-instance 'source
+  (make-instance 'ir-source
                  :name name
                  :path path
                  :text code))
 
+(deftest test-make-source ()
+  (let ((source (make-source "foo" :path #P"Test.flux")))
+    (test-equal "Test" (get-name source))))
+
+;; -----------------------------------------------------------------------------
+(defun is-source-file-path-p (path)
+  (member (string-downcase (pathname-type path))
+          *config-source-file-extensions*
+          :test #'equal))
+
+(deftest test-is-source-file-path-p ()
+  (test (is-source-file-path-p #P"test.flux"))
+  (test (is-source-file-path-p #P"Test.Flux"))
+  (test (not (is-source-file-path-p #P"Test")))
+  (test (not (is-source-file-path-p #P"Test/"))))
+
+;; -----------------------------------------------------------------------------
+(defun collect-sources (&rest file-paths)
+  ;;////REVIEW: in a "real" compiler, the loading should be asynchronous
+  (mapcan (lambda (path)
+    
+            (cond
+
+              ;; Use sources as is.
+              ((typep path 'ir-source)
+               (list path))
+
+              ;; Recurse into lists.
+              ((listp path)
+               (mapcan #'collect-sources path))
+
+              (t
+               ;; Convert everything else to pathnames.
+               (if (not (pathnamep path))
+                 (setf path (pathname path)))
+
+               (cond
+
+                 ;; Scan directories.
+                 ((directory-pathname-p path)
+                  (remove-if #'not
+                             (collect-sources (list-directory path))))
+
+                 ;; Collect single source file.
+                 ((is-source-file-path-p path)
+                  (list (make-source path)))
+
+                 ;; Ignore non-sources.
+                 (t
+                  nil)))))
+          file-paths))
+
 ;; -----------------------------------------------------------------------------
 (defun make-source-region (left right)
   (if (typep right 'scanner)
-    (setf right (scanner-position right)))
+    (setf right (get-position right)))
   (assert (<= left right))
   (cons left right))
 
@@ -152,7 +204,7 @@ to the previous line."
     (test-equal (elt table 2) 10)))
 
 ;; -----------------------------------------------------------------------------
-(defun line-break-p (table position)
+(defun is-line-break-p (table position)
   (assert (>= position 0))
   (if (zerop position)
       t
@@ -162,20 +214,22 @@ to the previous line."
               (t
                (equal (elt table index) position))))))
 
-(deftest test-line-break-p ()
+(deftest test-is-line-break-p ()
   (let ((table (make-line-break-table)))
     (add-line-break table 10)
-    (test (line-break-p table 0))
-    (test (line-break-p table 10))
-    (test (not (line-break-p table 5)))
-    (test (not (line-break-p table 15)))))
+    (test (is-line-break-p table 0))
+    (test (is-line-break-p table 10))
+    (test (not (is-line-break-p table 5)))
+    (test (not (is-line-break-p table 15)))))
 
 ;; -----------------------------------------------------------------------------
-(defsuite test-text-utilities ()
+(defsuite test-source ()
+  (test-make-source)
+  (test-is-source-file-path-p)
   (test-make-line-break-table-adds-first-line)
   (test-add-line-break-appends-line-at-end)
   (test-add-line-break-does-not-add-duplicates)
   (test-add-line-break-independent-of-insertion-order)
   (test-find-line-break-index)
-  (test-line-break-p))
+  (test-is-line-break-p))
 
