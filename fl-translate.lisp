@@ -50,6 +50,12 @@
      ,@body))
 
 ;; -----------------------------------------------------------------------------
+(defmacro with-new-symbol-table-state (&body body)
+  `(let ((*translate-function-table* (make-symbol-table))
+         (*translate-type-table* (make-symbol-table)))
+     ,@body))
+
+;; -----------------------------------------------------------------------------
 (defmacro test-translation (translate-function parser code &body checks)
   (with-gensyms (ast source code-value)
     `(with-new-parser-state ()
@@ -66,6 +72,10 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
+(defun make-symbol-table ()
+  (make-instance 'symbol-table))
+
+;; -----------------------------------------------------------------------------
 (defun push-scope ()
   ())
 
@@ -74,50 +84,66 @@
   ())
 
 ;; -----------------------------------------------------------------------------
-(defun collect-module (ast)
-  (declare (ignore ast))
-  ())
+(defgeneric collect-definitions-from-ast (ast))
 
 ;; -----------------------------------------------------------------------------
-(defun collect-type (ast)
+(defmethod collect-definitions-from-ast ((ast ast-module-definition))
+  (let* ((name-string (identifier-to-string (get-identifier ast)))
+         (module (make-instance 'ir-module
+                                :name name-string)))
+    (pushnew module (get-modules *translate-root*))
+    (with-new-symbol-table-state
+      (collect-definitions-from-ast (get-body ast)))
+    module))
+
+(deftest test-collect-module-definitions-adds-module-instance ()
+  (test-translation #'collect-definitions-from-ast
+                    #'parse-compilation-unit
+                    "module A {}"
+    (test (not (eq nil (get-modules *translate-root*))))))
+
+(deftest test-collect-module-definitions-sets-module-name ()
+  (test-translation #'collect-definitions-from-ast
+                    #'parse-compilation-unit
+                    "module A::B::C {}"
+    (test (some (lambda (definition)
+                  (equal "A::B::C" (get-name definition)))
+                (get-modules *translate-root*)))))
+
+(deftest test-collect-module-definitions ()
+  (test-collect-module-definitions-adds-module-instance)
+  (test-collect-module-definitions-sets-module-name))
+
+;; -----------------------------------------------------------------------------
+(defmethod collect-definitions-from-ast ((ast ast-type-definition))
   (declare (ignore ast))
   ())
 
-(deftest test-collect-type-simple ()
-  (test-translation #'collect-type
-                    #'parse-type
+(deftest test-collect-type-definitions-simple ()
+  (test-translation #'collect-definitions-from-ast
+                    #'parse-definition
                     "type A;"))
 
-(deftest test-collect-type ()
-  (test-collect-type-simple))
+(deftest test-collect-type-definitions ()
+  (test-collect-type-definitions-simple))
 
 ;; -----------------------------------------------------------------------------
-(defun collect-function (ast)
+(defmethod collect-definitions-from-ast ((ast ast-function-definition))
   (declare (ignore ast))
   ())
 
 ;; -----------------------------------------------------------------------------
-(defun collect-definition (ast)
-  (declare (ignore ast))
-  ())
+(defmethod collect-definitions-from-ast ((ast ast-list))
+  (mapcar #'collect-definitions-from-ast (get-list ast)))
+  
+;; -----------------------------------------------------------------------------
+(defmethod collect-definitions-from-ast ((ast ast-compilation-unit))
+  (collect-definitions-from-ast (get-definitions ast)))
 
 ;; -----------------------------------------------------------------------------
-(defun collect-modules (ast)
-  (declare (ignore ast))
-  ())
-
-(deftest test-collect-modules-simple ()
-  (test-translation #'collect-modules
-                    #'parse-compilation-unit
-                    "module A {}"))
-
-(deftest test-collect-modules ()
-  (test-collect-modules-simple))
-
-;; -----------------------------------------------------------------------------
-(defun collect-symbols ()
+(defun collect-definitions ()
   (dolist (source (get-sources *translate-root*))
-    (collect-modules (get-ast source)))) 
+    (collect-definitions-from-ast (get-ast source)))) 
 
 ;; -----------------------------------------------------------------------------
 (defun generate-types ()
@@ -130,12 +156,12 @@
 ;; -----------------------------------------------------------------------------
 (defun translate-sources (root)
   (with-new-translation-state (:root root)
-    (collect-symbols)
+    (collect-definitions)
     (generate-types)
     (generate-functions)))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-translate ()
-  (test-collect-type)
-  (test-collect-modules))
+  (test-collect-type-definitions)
+  (test-collect-module-definitions))
 

@@ -17,8 +17,9 @@
      :initform nil
      :documentation "List of ir-sources.")
    (modules
-     :reader get-modules
-     :initform (make-hash-table :test #'equal))
+     :accessor get-modules
+     :documentation "List of modules"
+     :initform nil)
    (programs
      :reader get-programs)))
 

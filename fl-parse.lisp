@@ -429,29 +429,57 @@
 
 ;; -----------------------------------------------------------------------------
 (defun parse-identifier (scanner)
-  ;;////TODO: parse qualified identifiers
+  ;;////TODO: escaped identifiers
+  ;;////TODO: global qualifier
   (let ((start-position (get-position scanner))
         (next-char (peek-next-token scanner))
-        (buffer (make-array 64 :adjustable t :fill-pointer 0 :element-type 'character)))
-    (if (or (alpha-char-p next-char)
-            (equal next-char #\_))
+        (buffer (make-array 64 :adjustable t :fill-pointer 0 :element-type 'character))
+        (expecting-name-after-qualifier nil)
+        (current-qualifier nil))
+    (flet ((buffer-to-identifier ()
+             ;;////TODO: simply use string intern table (shared with string literals) instead?  leave rest to IR symbol stuff.
+             ;;  using Lisp symbols is a bit of an abuse
+             (let ((name (intern buffer *parser-symbol-package*)))
+               (setf (fill-pointer buffer) 0)
+               (make-instance 'ast-identifier
+                              :source-region (make-source-region start-position scanner)
+                              :name name
+                              :qualifier current-qualifier))))
+      (if (or (alpha-char-p next-char)
+              (equal next-char #\_))
         (progn
           (read-next-token scanner)
           (vector-push-extend next-char buffer)
           (loop
-             (if (is-at-end-p scanner)
-                 (return))
-             (setf next-char (peek-next-token scanner))
-             (if (and (not (alphanumericp next-char))
-                      (not (equal next-char #\_)))
-                 (return))
-             (vector-push-extend next-char buffer)
-             (read-next-token scanner))
-          (parse-result-match (make-instance 'ast-identifier
-                                            :source-region (make-source-region start-position scanner)
-                                            ;;////TODO: simply use string intern table (shared with string literals) instead?  leave rest to IR symbol stuff.  using Lisp symbols is a bit of an abuse
-                                            :name (intern buffer *parser-symbol-package*))))
-        (parse-result-no-match))))
+            (if (is-at-end-p scanner)
+              (return))
+            (setf next-char (peek-next-token scanner))
+
+            (if (and (equal next-char #\:)
+                     (match-token-sequence scanner "::"))
+
+              ;; Handle qualifier.
+              (progn
+                (if expecting-name-after-qualifier
+                  (not-implemented "Parse error: expecting name after '::'"))
+                (if (zerop (length buffer))
+                  (not-implemented "global qualifier"))
+                (setf current-qualifier (buffer-to-identifier))
+                (setf expecting-name-after-qualifier t))
+
+              ;; Handle normal characters.
+              (progn
+                (if (and (not (alphanumericp next-char))
+                         (not (equal next-char #\_)))
+                  (progn
+                    (if expecting-name-after-qualifier
+                      (not-implemented "Parse error: expecting name after '::'"))
+                    (return)))
+                (vector-push-extend next-char buffer)
+                (setf expecting-name-after-qualifier nil)
+                (read-next-token scanner))))
+          (parse-result-match (buffer-to-identifier)))
+        (parse-result-no-match)))))
 
 (deftest test-parse-identifier-simple-name ()
   (test-parser parse-identifier "test"
@@ -459,8 +487,16 @@
                :checks ((test-same (intern "test" *config-default-output-package*) (get-name ast))
                         (test-equal nil (get-qualifier ast)))))
 
+(deftest test-parse-identifier-qualified ()
+  (test-parser parse-identifier "a::b"
+               :end-position 4 :is-match-p t :expected-type 'ast-identifier
+               :checks ((test-same (intern "b" *config-default-output-package*) (get-name ast))
+                        (test-type 'ast-identifier (get-qualifier ast))
+                        (test-same (intern "a" *config-default-output-package*) (get-name (get-qualifier ast))))))
+         
 (deftest test-parse-identifier ()
-  (test-parse-identifier-simple-name))
+  (test-parse-identifier-simple-name)
+  (test-parse-identifier-qualified))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause (scanner)
@@ -478,10 +514,10 @@
     (parse-whitespace scanner)
     (let ((expression (parse-expression scanner)))
       (if (parse-result-no-match-p expression)
-          (not-implemented "parse error; expecting expression"))
+        (not-implemented "parse error; expecting expression"))
       (parse-result-match (make-instance clause-type
-                                        :source-region (make-source-region saved-position scanner)
-                                        :expression (parse-result-value expression))))))
+                                         :source-region (make-source-region saved-position scanner)
+                                         :expression (parse-result-value expression))))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-clause-list (scanner)

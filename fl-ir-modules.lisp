@@ -20,15 +20,18 @@
    (exports
      :reader get-exports)
    (imports
-     :reader get-imports)
+     :reader get-imports
+     :documentation "List of imports (modules, types, functions).")
    (data
      :reader get-data)
    (types
      :reader get-types
-     :initform nil) ;;////TODO
+     :documentation "List of types defined in the module."
+     :initform nil)
    (functions
      :reader get-functions
-     :initform nil))) ;;////TODO
+     :documentation "List of functions defined the module."
+     :initform nil)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ir-module-reference ()

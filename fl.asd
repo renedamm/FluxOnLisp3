@@ -24,7 +24,14 @@
                (:file "fl-ir-sources" :depends-on ("fl-common" "fl-tests" "fl-scanner" "fl-utils" "fl-config"))
                (:file "fl-ir-root" :depends-on ("fl-common" "fl-tests"))
                (:file "fl-parse" :depends-on ("fl-common" "fl-tests" "fl-scanner" "fl-ast" "fl-config"))
-               (:file "fl-translate" :depends-on ("fl-common" "fl-tests" "fl-ir-sources" "fl-ir-root" "fl-parse")) ;; Parsing functionality needed for testing.
+               (:file "fl-translate" :depends-on ("fl-common"
+												  "fl-tests" "fl-ast"
+												  "fl-ir-sources"
+												  "fl-ir-modules"
+												  "fl-ir-types"
+												  "fl-ir-functions"
+												  "fl-ir-root"
+												  "fl-parse")) ;; Parsing functionality needed for testing.
                (:file "fl-optimize" :depends-on ("fl-common" "fl-tests"))
                (:file "fl-emit" :depends-on ("fl-common" "fl-tests"))
 			   ;;////TODO: rename to fl-driver

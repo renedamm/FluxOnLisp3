@@ -16,13 +16,18 @@
 ;; List of test suites.
 (defparameter *test-suites* nil)
 
+;; -----------------------------------------------------------------------------
+(defparameter *test-print-only-failures t)
+
 ;;;;============================================================================
 ;;;;    Functions.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
 (defun report-result (result form)
-  (format t "~:[FAIL~;pass~] ... ~a: ~a~%" result *test-name* form)
+  (if (or (not result)
+          (not *test-print-only-failures))
+    (format t "~:[FAIL~;pass~] ... ~a: ~a~%" result *test-name* form))
   result)
 
 ;; -----------------------------------------------------------------------------
