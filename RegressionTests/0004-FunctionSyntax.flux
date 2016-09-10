@@ -1,7 +1,0 @@
-
-module Test
-{
-	function Foobar : () -> ()
-	{
-	}
-}
