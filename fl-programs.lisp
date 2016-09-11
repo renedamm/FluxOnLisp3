@@ -15,6 +15,17 @@
 (defparameter *modules* (make-hash-table :test #'equal))
 
 ;;;;============================================================================
+;;;;    Macros.
+;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defmacro with-new-program-state (() &body body)
+  `(let ((*programs* (make-hash-table :test #'equal))
+         (*libraries* (make-hash-table :test #'equal))
+         (*modules* (make-hash-table :test #'equal)))
+     ,@body))
+
+;;;;============================================================================
 ;;;;    Classes.
 ;;;;============================================================================
 
@@ -30,6 +41,7 @@
     :reader get-ast
     :initarg :ast)
    (body
+    :initform nil
     :reader get-body
     :initarg :body)))
 
@@ -74,19 +86,30 @@
 
 ;; -----------------------------------------------------------------------------
 (defun fl-program (name &key body attributes)
-  (let ((program (make-instance 'fl-program
-                                :name name
-                                :body body)))
-    ;;////TODO: add to *programs*
+  (let* ((canonical-name (canonicalize name))
+         (program (make-instance 'fl-program
+                                 :name canonical-name
+                                 :body body)))
+    (if (gethash canonical-name *programs*)
+      (not-implemented "error: program with same name already defined"))
+    (setf (gethash canonical-name *programs*) program)
     program))
 
-(deftest test-can-create-empty-program ()
-  (let ((program (fl-program "test")))
-    (test (typep program 'fl-program))
-    (test-equal "test" (get-name program))))
+(deftest test-fl-program-adds-program-to-state ()
+  (with-new-program-state ()
+    (let ((program (fl-program "test")))
+      (test-equal 1 (hash-table-count *programs*))
+      (test-equal program (gethash (canonicalize "test") *programs*)))))
+
+(deftest test-fl-program-can-create-empty-program ()
+  (with-new-program-state ()
+    (let ((program (fl-program "test")))
+      (test (typep program 'fl-program))
+      (test-equal (canonicalize "test") (get-name program)))))
 
 (deftest test-fl-program ()
-  (test-can-create-empty-program))
+  (test-fl-program-adds-program-to-state)
+  (test-fl-program-can-create-empty-program))
 
 ;; -----------------------------------------------------------------------------
 (defun collect-all-functions (unit)
@@ -122,11 +145,12 @@
   ;(test-equal *object-nothing* (run (fl-program "test"))))
 
 (deftest test-can-run-program-with-empty-main-function ()
-  (let* ((program (fl-program "test"
-                              :body (list (fl-function "main"
-                                                       :type (fl-function-type *nothing-type* *nothing-type*)))))
-         (result (run program)))
-   (test-equal *object-nothing* result)))
+  (with-new-program-state ()
+    (let* ((program (fl-program "test"
+                                :body (list (fl-function "main"
+                                                         :type (fl-function-type *nothing-type* *nothing-type*)))))
+           (result (run program)))
+     (test-equal *object-nothing* result))))
 
 (deftest test-run ()
   (test-can-run-program-with-empty-main-function))

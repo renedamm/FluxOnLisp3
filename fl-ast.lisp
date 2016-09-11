@@ -353,6 +353,14 @@
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-library-definition (ast-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-program-definition (ast-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ast-compilation-unit (ast-node)
   ((definitions
      :reader get-definitions

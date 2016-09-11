@@ -105,6 +105,7 @@
 ;; -----------------------------------------------------------------------------
 (defun call (function argument &key resend-list) ;;////REVIEW: what about type arguments?
   (let ((body (get-body function)))
+    ;;////TODO: logic should be that if last statement wasn't a return, implicitly do "return Nothing;"
     (if (not body)
         *object-nothing*
         (not-implemented "executing statements"))))

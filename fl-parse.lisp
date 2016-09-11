@@ -1047,6 +1047,10 @@
                                  'ast-features-definition)
                                 ((match-keyword scanner "module")
                                  'ast-module-definition)
+                                ((match-keyword scanner "library")
+                                 'ast-library-definition)
+                                ((match-keyword scanner "program")
+                                 'ast-program-definition)
                                 (t
                                  (return-from parse-definition (parse-result-no-match)))))
 
@@ -1084,7 +1088,9 @@
           (t
            (setf body
                  ;;////FIXME: this should be unified into one single parsing path for both module and other definitions
-                 (if (eq 'ast-module-definition definition-class)
+                 (if (or (eq 'ast-module-definition definition-class)
+                         (eq 'ast-program-definition definition-class)
+                         (eq 'ast-library-definition definition-class))
                    (parse-definition-list scanner)
                    (parse-statement-list scanner)))))
 
