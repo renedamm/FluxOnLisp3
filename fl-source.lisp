@@ -1,14 +1,14 @@
 
 (in-package :fl)
 
-;;////TODO: print-object support for ir-source
+;;////TODO: print-object support for source
 
 ;;;;============================================================================
 ;;;;    Classes.
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defclass ir-source ()
+(defclass source ()
   ((name
      :reader get-name
      :initarg :name)
@@ -42,7 +42,7 @@
         (setf code (read-string code))))
   (if (and (not name) path)
       (setf name (pathname-name path)))
-  (make-instance 'ir-source
+  (make-instance 'source
                  :name name
                  :path path
                  :text code))
@@ -71,7 +71,7 @@
             (cond
 
               ;; Use sources as is.
-              ((typep path 'ir-source)
+              ((typep path 'source)
                (list path))
 
               ;; Recurse into lists.

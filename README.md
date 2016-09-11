@@ -12,4 +12,17 @@ Some Common Lisp. Been using Clozure Common Lisp with Lispbox 0.7.
    (asdf:operate 'asdf:load-op 'fl) ; Will fail because I named the ASDF and file differently
    (asdf:operate 'asdf:load-op "FluxOnLisp")
    (in-package :fl)
+   (run-unit-tests)
+
+To pick up changes:
+
+   (asdf:operate 'asdf:load-op "FluxOnLisp")
+
+To fully reload in Slime:
+
+   M-x slime-reload-system
+
+# TODO
+
+- Split into frontend and runtime
 

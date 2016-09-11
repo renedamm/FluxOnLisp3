@@ -108,11 +108,13 @@
        ,@body)))
 
 ;; -----------------------------------------------------------------------------
+;;////REVIEW: why does this take parameters? can kill?
 (defmacro deftest (name parameters &body body)
   `(deftest-internal ,name ,parameters
      ,@body))
 
 ;; -----------------------------------------------------------------------------
+;;////REVIEW: why does this take parameters? can kill?
 (defmacro defsuite (name parameters &body body)
   `(progn
      (deftest-internal ,name ,parameters
