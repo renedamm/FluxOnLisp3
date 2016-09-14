@@ -9,7 +9,11 @@
 (defclass fl-type ()
   ((parameters
     :initform nil
-    :reader get-type-parameters)))
+    :reader get-type-parameters)
+   (ast
+    :initform nil
+    :reader get-ast
+    :initarg :ast)))
 
 ;; -----------------------------------------------------------------------------
 (defclass fl-primitive-type (fl-type)
@@ -25,7 +29,13 @@
 
 ;; -----------------------------------------------------------------------------
 (defclass fl-named-type (fl-type)
-  ())
+  ((name
+    :reader get-name
+    :initarg :name)
+   (resolved-type
+    :initform nil
+    :reader get-resolved-type
+    :writer set-resolved-type)))
 
 ;; -----------------------------------------------------------------------------
 (defclass fl-derived-type (fl-type)
@@ -35,10 +45,17 @@
 
 ;; -----------------------------------------------------------------------------
 (defclass fl-singleton-type (fl-derived-type)
+  ((singleton
+    :initform nil
+    :reader get-singleton
+    :writer set-singleton)))
+
+;; -----------------------------------------------------------------------------
+(defclass fl-variable-type (fl-derived-type)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass fl-instanced-type (fl-type)
+(defclass fl-instanced-type (fl-derived-type)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -81,11 +98,18 @@
 (defparameter *bottom-type* (make-instance 'fl-bottom-type))
 
 ;; -----------------------------------------------------------------------------
+;;////REVIEW: this seems wrong... shouldn't this come from source?
 (defparameter *nothing-type* (make-instance 'fl-singleton-type :base *top-type*))
 
 ;;;;============================================================================
 ;;;;    Functions.
 ;;;;============================================================================
+
+;; -----------------------------------------------------------------------------
+(defun fl-named-type (name &key ast)
+  (make-instance 'fl-named-type
+                 :name (canonicalize name)
+                 :ast ast))
 
 ;; -----------------------------------------------------------------------------
 (defun fl-derived-type (base-type)
@@ -99,7 +123,18 @@
                  :right result-type))
 
 ;; -----------------------------------------------------------------------------
+(defun fl-singleton-type (base-type)
+  (make-instance 'fl-singleton-type
+                 :base base-type))
+
+;; -----------------------------------------------------------------------------
+(defun singleton-type-p (type)
+  ;;////TODO: resolve type, if necessary
+  (typep type 'fl-singleton-type))
+
+;; -----------------------------------------------------------------------------
 (defun subtype-p (super sub)
+  ;;////TODO: resolve type, if necessary
   (cond
     ((eq super sub) t)
     ((eq *top-type* super) t)

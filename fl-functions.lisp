@@ -6,12 +6,7 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defparameter *stack* nil)
-
-;; -----------------------------------------------------------------------------
 (defparameter *dispatchers* nil)
-
-;; -----------------------------------------------------------------------------
 
 ;;;;============================================================================
 ;;;;    Classes.
@@ -21,7 +16,8 @@
 (defclass fl-function ()
   ((name
     :reader get-name
-    :initarg :name)
+    :initarg :name
+    :documentation "Fully qualified name")
    (type
     :reader get-type
     :writer set-type
@@ -37,7 +33,11 @@
    (run-type
     :initform 'inside  ;; 'inside, 'before, 'after, or 'around
     :reader get-run-type
-    :initarg :run-type)))
+    :initarg :run-type)
+   (ast
+    :initform nil
+    :reader get-ast
+    :initarg :ast)))
 
 ;; -----------------------------------------------------------------------------
 (defclass fl-variable ()
@@ -74,7 +74,7 @@
 ;;;;////TODO: canonicalize names everwhere
 
 ;; -----------------------------------------------------------------------------
-(defun fl-function (name &key attributes modifiers type body)
+(defun fl-function (name &key attributes modifiers type body ast)
   (let* ((run-type-modifiers (remove-if-not #'run-type-modifier-p (if (consp modifiers) modifiers (list modifiers))))
          (run-type (cond
                     ((not run-type-modifiers) 'inside)
@@ -87,7 +87,8 @@
                    :modifiers modifiers
                    :run-type run-type
                    :type type
-                   :body body)))
+                   :body body
+                   :ast ast)))
 
 (deftest test-fl-function-run-types ()
   (let ((type (fl-function-type *nothing-type* *nothing-type*)))

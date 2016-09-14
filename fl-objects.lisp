@@ -19,7 +19,7 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defun make-object (type)
+(defun fl-object (&key type)
   (make-instance 'fl-object
                  :type type))
 
@@ -42,5 +42,5 @@
 
 ;; -----------------------------------------------------------------------------
 ;; Object representing System::Optional::Nothing.
-(defparameter *object-nothing* (make-object *nothing-type*))
+(defparameter *object-nothing* (fl-object :type *nothing-type*))
 
