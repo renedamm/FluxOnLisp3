@@ -25,18 +25,12 @@
     (fl-function-type left-type right-type)))
 
 ;; -----------------------------------------------------------------------------
-(defmethod rewrite ((ast ast-object-definition))
-  ;;////TODO: if inside namespace, need to take into account for name used for binding
-  (let* ((type (fl-singleton-type *top-type*)) ;;////TODO: proper base type
-         (singleton (fl-object :type type)))
-    (set-singleton singleton type)
-    type))
+(defmethod rewrite ((ast ast-name-expression))
+  (fl-name-expression (identifier-to-string (get-identifier ast))))
 
 ;; -----------------------------------------------------------------------------
-(defmethod rewrite ((ast ast-function-definition))
-  (fl-function (identifier-to-string (get-identifier ast))
-               :type (rewrite (get-type ast))
-               :ast ast))
+(defmethod rewrite ((ast ast-return-statement))
+  (fl-return-statement (rewrite (get-return-expression ast))))
 
 ;; -----------------------------------------------------------------------------
 (defun rewrite-body (ast)
@@ -48,8 +42,22 @@
       (setf result (append defs result)))))
 
 ;; -----------------------------------------------------------------------------
+(defmethod rewrite ((ast ast-object-definition))
+  ;;////TODO: if inside namespace, need to take into account for name used for binding
+  (fl-singleton ;;////TODO: proper base type
+    :name (identifier-to-string (get-identifier ast))))
+
+;; -----------------------------------------------------------------------------
+(defmethod rewrite ((ast ast-function-definition))
+  (fl-function (identifier-to-string (get-identifier ast))
+               :type (rewrite (get-type ast))
+               :ast ast
+               :body (rewrite-body ast)))
+
+;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-features-definition))
-  (rewrite-body ast))
+  ;;////TODO: need to apply modifiers
+  (values-list (rewrite-body ast)))
 
 ;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-namespace-definition))

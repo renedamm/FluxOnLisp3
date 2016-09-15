@@ -27,5 +27,5 @@
                (:file "fl-attributes" :depends-on ("fl-common" "fl-tests"))
                (:file "fl-interpreter" :depends-on ("fl-common" "fl-tests" "fl-programs" "fl-names"))
                (:file "fl-driver" :depends-on ("fl-common" "fl-tests" "fl-programs" "fl-parse" "fl-scanner" "fl-rewrite"))
-               (:file "fl-acceptance-tests" :depends-on ("fl-common" "fl-tests" "fl-driver" "fl-objects"))))
+               (:file "fl-acceptance-tests" :depends-on ("fl-common" "fl-tests" "fl-driver" "fl-objects" "fl-names"))))
 

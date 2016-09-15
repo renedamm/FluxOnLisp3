@@ -14,6 +14,15 @@
     :initform (make-hash-table)
     :reader get-slots)))
 
+(defclass fl-singleton (fl-object)
+  ((name
+    :reader get-name
+    :initarg :name)
+   (qualified-name
+    :initform nil
+    :reader get-qualified-name
+    :writer set-qualified-name)))
+
 ;;;;============================================================================
 ;;;;    Functions.
 ;;;;============================================================================
@@ -24,10 +33,18 @@
                  :type type))
 
 ;; -----------------------------------------------------------------------------
-(defun typeof (value)
-  (cond
-    ((typep value 'fl-object) (get-type value))
-    (t (not-implemented "get type of value"))))
+(defun fl-singleton (&key name base-type)
+  (make-instance 'fl-singleton
+                 :type (fl-singleton-type (if base-type base-type *top-type*))
+                 :name (canonicalize name)))
+
+;; -----------------------------------------------------------------------------
+(defun fl-singleton-p (value)
+  (typep value 'fl-singleton))
+
+;; -----------------------------------------------------------------------------
+(defmethod typeof ((object fl-object))
+  (get-type object))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-objects ()
@@ -36,9 +53,6 @@
 ;;;;============================================================================
 ;;;;    Globals.
 ;;;;============================================================================
-
-;; -----------------------------------------------------------------------------
-(defparameter *singletons* nil)
 
 ;; -----------------------------------------------------------------------------
 ;; Object representing System::Optional::Nothing.

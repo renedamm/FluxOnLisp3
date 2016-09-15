@@ -104,14 +104,6 @@
   (typep value 'fl-function))
 
 ;; -----------------------------------------------------------------------------
-(defun call (function argument &key resend-list) ;;////REVIEW: what about type arguments?
-  (let ((body (get-body function)))
-    ;;////TODO: logic should be that if last statement wasn't a return, implicitly do "return Nothing;"
-    (if (not body)
-        *object-nothing*
-        (not-implemented "executing statements"))))
-
-;; -----------------------------------------------------------------------------
 (defun make-dispatcher (name)
   (make-instance 'dispatcher
                  :function-name (canonicalize name)))
@@ -160,20 +152,6 @@
 ;; -----------------------------------------------------------------------------
 (defun specialize (dispatch-tree type-arg value-arg)
   ())
-
-;; -----------------------------------------------------------------------------
-;; Builds a list of functions selected from the dispatch tree that
-;; are applicable to the given type and value argument, then sorts the
-;; list according to precedence, and invokes the functions one by one
-;; until ...
-;;;; not quite right; need to take before, after, and around into account properly
-(defun dispatch (dispatcher type-arg value-arg)
-  (let* ((functions (collect-applicable-functions dispatcher type-arg value-arg))
-         (num-functions (length functions)))
-    (cond
-      ((eq 0 num-functions) (not-implemented "error: no applicable functions for given argument"))
-      ((> 1 num-functions) (not-implemented "actual dispatching..."))
-      (t (call (first functions) value-arg)))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-functions ()

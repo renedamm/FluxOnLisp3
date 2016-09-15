@@ -53,16 +53,38 @@
          (existing (gethash canonical-name bindings)))
     (setf (gethash canonical-name bindings) (cons entity existing))))
 
-;; -----------------------------------------------------------------------------
-(defun lookup (scope name)
-  (let ((canonical-name (canonicalize name)))
-    (gethash canonical-name (get-bindings scope))))
-
-(deftest test-lookup ()
+(deftest test-bind-adds-bindings-to-hashtable ()
   (let ((scope (make-instance 'scope)))
     (bind scope "Test" 1)
-    (test-equal 1 (first (gethash "TEST" (get-bindings scope))))
+    (test-equal 1 (first (gethash "TEST" (get-bindings scope))))))
+
+(deftest test-bind ()
+  (test-bind-adds-bindings-to-hashtable))
+
+;; -----------------------------------------------------------------------------
+(defun lookup (scope name)
+  (let* ((canonical-name (canonicalize name))
+         (result (gethash canonical-name (get-bindings scope))))
+    (if result
+        result
+        (let ((parent (get-parent scope)))
+          (if parent
+              (lookup parent name))))))
+
+(deftest test-lookup-can-find-binding-directly-in-scope ()
+  (let ((scope (make-instance 'scope)))
+    (bind scope "Test" 1)
     (test-sequence-equal '(1) (lookup scope "Test"))))
+
+(deftest test-lookup-can-find-binding-in-parent-scope ()
+  (let* ((outer (make-instance 'scope))
+         (inner (make-instance 'scope :parent outer)))
+    (bind outer "Test" 1)
+    (test-sequence-equal '(1) (lookup inner "Test"))))
+
+(deftest test-lookup ()
+  (test-lookup-can-find-binding-directly-in-scope)
+  (test-lookup-can-find-binding-in-parent-scope))
 
 ;; -----------------------------------------------------------------------------
 (defun canonicalize (name)
@@ -104,6 +126,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-names ()
+  (test-bind)
   (test-lookup)
   (test-canonicalize))
 

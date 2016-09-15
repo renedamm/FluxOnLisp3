@@ -46,7 +46,8 @@
                 }
             }
            ")))
-    (test (singleton-type-p (typeof result)))))
+    (test (fl-singleton-p result))
+    (test-equal (canonicalize "Test") (get-name result))))
 
 ;; -----------------------------------------------------------------------------
 (deftest test-introduces-all-definitions-in-a-scope-simultaneously ()
@@ -61,7 +62,8 @@
                 object Test;
             }
            ")))
-    (test (singleton-type-p (typeof result)))))
+    (test (fl-singleton-p result))
+    (test-equal (canonicalize "Test") (get-name result))))
 
 ;; -----------------------------------------------------------------------------
 (deftest test-puts-definitions-in-right-namespace ()
@@ -82,7 +84,8 @@
                 }
             }
            ")))
-    (test (singleton-type-p (typeof result)))))
+    (test (fl-singleton-p result))
+    (test-equal (canonicalize "Outer::Inner::InnerMost::Test") (get-qualified-name result))))
 
 ;; -----------------------------------------------------------------------------
 ;;/////TODO: need test to ensure modifiers on the feature groups are applied
@@ -104,7 +107,27 @@
                 }
             }
            ")))
-    (test (singleton-type-p (typeof result)))))
+    (test (fl-singleton-p result))
+    (test-equal (canonicalize "Test") (get-name result))))
+
+;; -----------------------------------------------------------------------------
+(deftest test-can-execute-hello-world-program ()
+  (let ((result
+          (run-flux "
+            program Test
+            {
+                type String;
+                [ InternalCall ]
+                function Print : String -> ();
+
+                function Main : () -> ()
+                {
+                    Print( \"Hello, World!\" );
+                }
+            }
+           ")))
+    (test (fl-singleton-p result))
+    (test-equal (canonicalize "Outer::Inner::InterMost::Test") (get-name result))))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-acceptance ()
@@ -114,4 +137,5 @@
   (test-introduces-all-definitions-in-a-scope-simultaneously)
   (test-puts-definitions-in-right-namespace)
   (test-ignores-feature-groups))
+  ;(test-can-execute-hello-world-program))
 
