@@ -32,25 +32,8 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defclass fl-import ()
+(defclass fl-unit (fl-definition-with-body)
   ())
-
-;; -----------------------------------------------------------------------------
-(defclass fl-unit ()
-  ((name
-    :reader get-name
-    :initarg :name)
-   (imports
-    :reader get-imports
-    :initarg :imports);;////REVIEW:??
-   (ast
-    :initform nil
-    :reader get-ast
-    :initarg :ast)
-   (body
-    :initform nil
-    :reader get-body
-    :initarg :body)))
 
 ;; -----------------------------------------------------------------------------
 (defclass fl-program (fl-unit)
@@ -92,28 +75,31 @@
                  :function-name (canonicalize function-name)))
 
 ;; -----------------------------------------------------------------------------
-(defun fl-unit (name &key body attributes ast table unit-type)
+(defun fl-unit (name &key body attributes modifiers ast table unit-type)
   (let* ((canonical-name (canonicalize name))
          (unit (make-instance unit-type
                               :name canonical-name
                               :body body
+                              :modifiers modifiers
                               :ast ast)))
-    (if (gethash canonical-name table)
-      (not-implemented "error: unit with same name already defined"))
-    (setf (gethash canonical-name table) unit)
+    (if (not (has-modifier-p 'import modifiers))
+      (progn
+        (if (gethash canonical-name table)
+          (not-implemented "error: unit with same name already defined"))
+        (setf (gethash canonical-name table) unit)))
     unit))
 
 ;; -----------------------------------------------------------------------------
-(defun fl-module (name &key body attributes ast)
-  (fl-unit name :body body :attributes attributes :ast ast :table *modules* :unit-type 'fl-module))
+(defun fl-module (name &key body attributes ast modifiers)
+  (fl-unit name :body body :attributes attributes :ast ast :modifiers modifiers :table *modules* :unit-type 'fl-module))
 
 ;; -----------------------------------------------------------------------------
-(defun fl-library (name &key body attributes ast)
-  (fl-unit name :body body :attributes attributes :ast ast :table *libraries* :unit-type 'fl-library))
+(defun fl-library (name &key body attributes ast modifiers)
+  (fl-unit name :body body :attributes attributes :ast ast :modifiers modifiers :table *libraries* :unit-type 'fl-library))
 
 ;; -----------------------------------------------------------------------------
-(defun fl-program (name &key body attributes ast)
-  (fl-unit name :body body :attributes attributes :ast ast :table *programs* :unit-type 'fl-program))
+(defun fl-program (name &key body attributes ast modifiers)
+  (fl-unit name :body body :attributes attributes :ast ast :modifiers modifiers :table *programs* :unit-type 'fl-program))
 
 (deftest test-fl-program-adds-program-to-state ()
   (with-new-program-state ()

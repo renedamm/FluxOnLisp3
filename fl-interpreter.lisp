@@ -86,6 +86,11 @@
   (concatenate 'string *current-namespace-prefix* (get-name definition)))
 
 ;; -----------------------------------------------------------------------------
+(defmethod collect-definition :around ((definition fl-definition))
+  (if (not (is-import-p definition))
+    (call-next-method)))
+
+;; -----------------------------------------------------------------------------
 (defmethod collect-definition ((singleton fl-singleton))
   (let ((qualified-name (qualified-name-of singleton)))
     (set-qualified-name qualified-name singleton)

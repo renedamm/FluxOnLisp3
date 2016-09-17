@@ -31,3 +31,8 @@
 
       (walk-directory *config-library-directory* #'load-file :directories nil))))
 
+;; -----------------------------------------------------------------------------
+(defun unload-standard-libraries ()
+  (setf *standard-libraries* nil))
+
+

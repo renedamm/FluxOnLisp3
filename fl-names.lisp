@@ -6,17 +6,52 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defclass fl-namespace ()
+(defclass fl-definition ()
   ((name
     :reader get-name
     :initarg :name)
+   (modifiers
+    :initform nil
+    :reader get-modifiers
+    :initarg :modifiers)
    (ast
     :initform nil
     :reader get-ast
     :initarg :ast)
-   (body
+   (is-import
+    :initform nil
+    :reader is-import-p
+    :writer set-is-import
+    :initarg :is-import)
+   (is-abstract
+    :initform nil
+    :reader is-abstract-p
+    :writer set-is-abstract
+    :initarg :is-abstract)
+   (is-private
+    :initform nil
+    :reader is-private-p
+    :writer set-is-private
+    :initarg :is-private)))
+
+;; -----------------------------------------------------------------------------
+(defclass fl-definition-with-body (fl-definition)
+  ((body
+    :initform nil
     :reader get-body
     :initarg :body)))
+
+;; -----------------------------------------------------------------------------
+(defclass fl-definition-with-type (fl-definition)
+  ((type
+    :initform nil
+    :reader get-type
+    :writer set-type
+    :initarg :type)))
+
+;; -----------------------------------------------------------------------------
+(defclass fl-namespace (fl-definition-with-body)
+  ())
 
 ;; -----------------------------------------------------------------------------
 (defclass scope ()
@@ -40,10 +75,21 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defun fl-namespace (name &key ast body)
+(defmethod initialize-instance :after ((definition fl-definition) &key)
+  (let ((modifiers (get-modifiers definition)))
+    (if (has-modifier-p 'import modifiers)
+      (set-is-import t definition))
+    (if (has-modifier-p 'private modifiers)
+      (set-is-private t definition))
+    (if (has-modifier-p 'abstract modifiers)
+      (set-is-abstract t definition))))
+
+;; -----------------------------------------------------------------------------
+(defun fl-namespace (name &key ast body modifiers)
   (make-instance 'fl-namespace
                  :name (canonicalize name)
                  :ast ast
+                 :modifiers modifiers
                  :body body))
 
 ;; -----------------------------------------------------------------------------

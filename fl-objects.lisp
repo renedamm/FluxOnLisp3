@@ -14,11 +14,8 @@
     :initform (make-hash-table)
     :reader get-slots)))
 
-(defclass fl-singleton (fl-object)
-  ((name
-    :reader get-name
-    :initarg :name)
-   (qualified-name
+(defclass fl-singleton (fl-object fl-definition)
+  ((qualified-name
     :initform nil
     :reader get-qualified-name
     :writer set-qualified-name)))
@@ -33,10 +30,12 @@
                  :type type))
 
 ;; -----------------------------------------------------------------------------
-(defun fl-singleton (&key name base-type)
+(defun fl-singleton (name &key base-type modifiers ast)
   (make-instance 'fl-singleton
                  :type (fl-singleton-type (if base-type base-type *top-type*))
-                 :name (canonicalize name)))
+                 :name (canonicalize name)
+                 :ast ast
+                 :modifiers modifiers))
 
 ;; -----------------------------------------------------------------------------
 (defun fl-singleton-p (value)

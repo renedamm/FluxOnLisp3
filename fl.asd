@@ -17,7 +17,7 @@
                (:file "fl-objects" :depends-on ("fl-common" "fl-tests" "fl-types"))
                (:file "fl-programs" :depends-on ("fl-common" "fl-tests" "fl-objects" "fl-functions" "fl-names"))
                (:file "fl-functions" :depends-on ("fl-common" "fl-tests" "fl-names" "fl-modifiers"))
-               (:file "fl-names" :depends-on ("fl-common" "fl-tests" "fl-scanner"))
+               (:file "fl-names" :depends-on ("fl-common" "fl-tests" "fl-scanner" "fl-modifiers"))
                (:file "fl-types" :depends-on ("fl-common" "fl-tests" "fl-names"))
                (:file "fl-rewrite" :depends-on ("fl-common" "fl-tests" "fl-names" "fl-ast" "fl-programs" "fl-types" "fl-functions" "fl-objects"))
                (:file "fl-modifiers" :depends-on ("fl-common" "fl-tests"))
@@ -28,5 +28,5 @@
                (:file "fl-stdlib" :depends-on ("fl-common" "fl-tests" "fl-config" "fl-utils" "fl-source" "fl-scanner" "fl-parse"))
                (:file "fl-interpreter" :depends-on ("fl-common" "fl-tests" "fl-programs" "fl-names"))
                (:file "fl-driver" :depends-on ("fl-common" "fl-tests" "fl-programs" "fl-parse" "fl-scanner" "fl-rewrite"))
-               (:file "fl-acceptance-tests" :depends-on ("fl-common" "fl-tests" "fl-driver" "fl-objects" "fl-names"))))
+               (:file "fl-acceptance-tests" :depends-on ("fl-common" "fl-tests" "fl-driver" "fl-objects" "fl-names" "fl-stdlib"))))
 

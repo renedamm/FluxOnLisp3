@@ -366,15 +366,19 @@
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-module-definition (ast-definition)
+(defclass ast-unit-definition (ast-definition)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-library-definition (ast-definition)
+(defclass ast-module-definition (ast-unit-definition)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-program-definition (ast-definition)
+(defclass ast-library-definition (ast-unit-definition)
+  ())
+
+;; -----------------------------------------------------------------------------
+(defclass ast-program-definition (ast-unit-definition)
   ())
 
 ;; -----------------------------------------------------------------------------
@@ -459,11 +463,11 @@
     (test-equal "test" (identifier-to-string id1))))
 
 ;; -----------------------------------------------------------------------------
-(defun definition-has-modifier-p (ast type)
+(defun definition-has-modifier-p (ast modifier-type)
   (let ((modifiers (get-modifiers ast)))
     (if (not modifiers)
         nil
-        (find-if (lambda (modifier) (typep modifier type)) (get-list modifiers)))))
+        (find-if (lambda (modifier) (typep modifier modifier-type)) (get-list modifiers)))))
 
 (deftest test-definition-has-modifier-p ()
   (let ((abstract-ast (make-instance 'ast-definition
@@ -477,6 +481,10 @@
 ;; -----------------------------------------------------------------------------
 (defun definition-abstract-p (ast)
   (definition-has-modifier-p ast 'ast-abstract-modifier))
+
+;; -----------------------------------------------------------------------------
+(defun definition-import-p (ast)
+  (definition-has-modifier-p ast 'ast-import-modifier))
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-asts ()

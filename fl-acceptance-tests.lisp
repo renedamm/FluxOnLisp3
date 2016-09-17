@@ -135,6 +135,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defsuite test-acceptance ()
+  (unload-standard-libraries)
   (test-can-execute-program-with-empty-main-function)
   (test-ignores-comments)
   (test-can-execute-program-returning-singleton)
