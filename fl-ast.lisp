@@ -130,6 +130,15 @@
   ())
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-attribute (ast-node)
+  ((name
+    :reader get-identifier
+    :initarg :name)
+   (arguments
+    :reader get-arguments
+    :initarg :arguments)))
+
+;; -----------------------------------------------------------------------------
 (defclass ast-clause (ast-node)
   (expression
     :reader get-clause-expression

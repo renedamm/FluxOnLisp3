@@ -66,9 +66,16 @@
                 :body (rewrite-body ast)))
 
 ;; -----------------------------------------------------------------------------
+(defmethod rewrite ((ast ast-library-definition))
+  (fl-library (identifier-to-string (get-identifier ast))
+              :ast ast
+              :body (rewrite-body ast)))
+
+;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-program-definition))
   ;;////TODO: make sure we're at toplevel
   (fl-program (identifier-to-string (get-identifier ast))
+              :ast ast
               :body (rewrite-body ast)))
 
 ;; -----------------------------------------------------------------------------

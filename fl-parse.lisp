@@ -244,103 +244,134 @@
 ;; down into more atomic combinators that can be composed to create the same effect as this
 ;; combinator here yet in a more flexible manner.  However, it works nicely for the parsers
 ;; we have.
-(defmacro parse-list (parser-name scanner &key start-delimiter end-delimiter separator)
+(defmacro parse-list (parser-name scanner &key start-delimiter end-delimiter separator can-repeat)
   ;; List must either be undelimited or have both a start and end
   ;; delimiter.
-  (with-gensyms (scanner-value list start-position element parse-list-block)
-    `(block ,parse-list-block
-       (let ((,scanner-value ,scanner))
+  (with-gensyms (scanner-value list list-count start-position element parse-single-list-block result)
+    `(let* ((,scanner-value ,scanner)
+            ,list
+            (,list-count 0)
+            ,start-position)
+       (parse-whitespace ,scanner)
+       (setf ,start-position (get-position ,scanner))
+       (loop
+         (let
 
-         (parse-whitespace ,scanner-value)
-         (let ((,start-position (get-position ,scanner-value))
-               ,element
-               ,list)
+           ;; Parse a single delimited list adding all elements to 'list'.
+           ((,result
+             (block ,parse-single-list-block
+               (incf ,list-count)
+               (let (,element)
 
-           ;; Match start-delimiter.
-           ,(if start-delimiter
-                `(progn
-                   (parse-whitespace ,scanner-value)
-                   (if (not (match-next-token ,scanner-value ,start-delimiter))
-                       (return-from ,parse-list-block (parse-result-no-match)))))
-
-           ;; Match elements.
-           (loop
-
-              ;; Try to parse another element.
-              (parse-whitespace ,scanner-value)
-              (setf ,element (,parser-name ,scanner-value))
-              (parse-whitespace ,scanner-value)
-
-              ;; Handle parse result.
-              (cond
-
-                ;; Handle match.
-                ((parse-result-match-p ,element)
-                 (setf ,list (cons (parse-result-value ,element) ,list))
-               
-                 ;; Consume separator or terminate on end-delimiter.
-                 ,(cond
-
-                   ;; In a list with only separators and no end-delimiter,
-                   ;; we stop as soon as an element isn't followed by a separator.
-                   ((and separator (not end-delimiter))
-                    `(if (not (match-next-token ,scanner-value ,separator))
-                         (return)))
-
-                   ;; In a list with both separators and an end-delimiter, we
-                   ;; continue if we see a separator and we stop if we see an
-                   ;; end-delimiter.
-                   ((and separator end-delimiter)
-                    `(if (match-next-token ,scanner-value ,separator)
-                         t
-                         (if (match-next-token ,scanner-value ,end-delimiter)
-                             (return)
-                             (not-implemented "expecting separator or terminator"))))))
-
-                ;; Handle no match.
-                ((parse-result-no-match-p ,element)
-               
-                 ,(if separator
-                    `(cond
-
-                       ;; If we don't have an end-delimiter and we've already read
-                       ;; one or more elements, we're missing an element.
-                       ((and ,(not end-delimiter)
-                             ,list)
-                        (let* ((diagnostic (make-diagnostic (get-diagnostic-type-for-expecting ',parser-name)))
-                               (ast (make-ast-error diagnostic)))
-                          (not-implemented "error handling")
-                          (setf ,list (cons ast ,list))
-                          (return)))
-
-                       ;; If next up is a separator, we're missing an element.
-                       ((match-next-token ,scanner-value ,separator)
-                        (not-implemented "error; expecting element"))
-
-                       ;; Otherwise, if we haven't yet parsed any elements and we don't
-                       ;; have an end-delimiter, we consider it a no-match rather than a match
-                       ;; against an empty list.
-                       ((and (not ,list)
-                             ,(not end-delimiter))
-                        (return-from ,parse-list-block (parse-result-no-match)))))
-
-                 ,(if end-delimiter
-                    `(if (not (match-next-token ,scanner-value ,end-delimiter))
-                       (not-implemented "error; expecting element or terminator")))
-
-                 ;; We have no separator and no end delimiter.  If we've already read elements
-                 ;; or we have a start delimiter, simply return what we have.  Otherwise report
-                 ;; an empty list by returning a nil value.
+                 ;; Match start-delimiter.
                  ,(if start-delimiter
-                   `(return)
-                   `(if ,list
-                      (return)
-                      (return-from ,parse-list-block (parse-result-no-match)))))))
-                  
-           (setf ,list (nreverse ,list))
-           (make-instance 'ast-list
-                         :source-region (make-source-region ,start-position ,scanner-value)
-                         :nodes ,list))))))
+                      `(progn
+                         (parse-whitespace ,scanner-value)
+                         (if (not (match-next-token ,scanner-value ,start-delimiter))
+                             (return-from ,parse-single-list-block (parse-result-no-match)))))
+
+               ;; Match elements.
+               (loop
+
+                  ;; Try to parse another element.
+                  (parse-whitespace ,scanner-value)
+                  (setf ,element (,parser-name ,scanner-value))
+                  (parse-whitespace ,scanner-value)
+
+                  ;; Handle parse result.
+                  (cond
+
+                    ;; Handle match.
+                    ((parse-result-match-p ,element)
+                     (setf ,list (cons (parse-result-value ,element) ,list))
+             
+                     ;; Consume separator or terminate on end-delimiter.
+                     ,(cond
+
+                       ;; In a list with only separators and no end-delimiter,
+                       ;; we stop as soon as an element isn't followed by a separator.
+                       ((and separator (not end-delimiter))
+                        `(if (not (match-next-token ,scanner-value ,separator))
+                             (return)))
+
+                       ;; In a list with both separators and an end-delimiter, we
+                       ;; continue if we see a separator and we stop if we see an
+                       ;; end-delimiter.
+                       ((and separator end-delimiter)
+                        `(if (match-next-token ,scanner-value ,separator)
+                             t
+                             (if (match-next-token ,scanner-value ,end-delimiter)
+                                 (return)
+                                 (not-implemented "expecting separator or terminator"))))))
+
+                    ;; Handle no match.
+                    ((parse-result-no-match-p ,element)
+             
+                     ,(if separator
+                        `(cond
+
+                           ;; If we don't have an end-delimiter and we've already read
+                           ;; one or more elements, we're missing an element.
+                           ((and ,(not end-delimiter)
+                                 ,list)
+                            (let* ((diagnostic (make-diagnostic (get-diagnostic-type-for-expecting ',parser-name)))
+                                   (ast (make-ast-error diagnostic)))
+                              (not-implemented "error handling")
+                              (setf ,list (cons ast ,list))
+                              (return)))
+
+                           ;; If next up is a separator, we're missing an element.
+                           ((match-next-token ,scanner-value ,separator)
+                            (not-implemented "error; expecting element"))
+
+                           ;; Otherwise, if we haven't yet parsed any elements and we don't
+                           ;; have an end-delimiter, we consider it a no-match rather than a match
+                           ;; against an empty list.
+                           ((and (not ,list)
+                                 ,(not end-delimiter))
+                            (return-from ,parse-single-list-block (parse-result-no-match)))))
+
+                     ,(if end-delimiter
+                        `(if (not (match-next-token ,scanner-value ,end-delimiter))
+                           (not-implemented "error; expecting element or terminator")
+                           (return)))
+
+                     ;; We have no separator and no end delimiter.  If we've already read elements
+                     ;; or we have a start delimiter, simply return what we have.  Otherwise report
+                     ;; an empty list by returning a nil value.
+                     ,(if start-delimiter
+                       `(return)
+                       `(if ,list
+                          (return)
+                          (return-from ,parse-single-list-block (parse-result-no-match)))))))))))
+
+                ;; Decide whether to continue on or return.
+                ,(if can-repeat
+                  `(cond
+                     ;; No match if parse didn't progress and we have no prior successful parse.
+                     ((and (parse-result-no-match-p ,result)
+                           (eq 1 ,list-count))
+                      (return ,result))
+
+                     ;; Match if parse didn't progress and we have a prior successful parse.
+                     ((and (parse-result-no-match-p ,result)
+                           (> ,list-count 1))
+                      (return
+                        (parse-result-match
+                          (make-instance 'ast-list
+                                         :source-region (make-source-region ,start-position ,scanner-value)
+                                         :nodes (nreverse ,list))))) ; List may be empty (e.g. "[] []").
+                     (t nil)) ; Just keep going.
+
+                  ;; For non-repeating lists, one successful parse is all we want.
+                  `(if (parse-result-no-match-p ,result)
+                     (return ,result)
+                     (return
+                       (parse-result-match
+                         (make-instance 'ast-list
+                                        :source-region (make-source-region ,start-position ,scanner-value)
+                                        :nodes (nreverse ,list)))))))))))
+
 
 (deftest test-parse-list ()
   (labels
@@ -355,7 +386,13 @@
 
        ;; Parser that matches "a, a, a...".
        (parse-comma-separated-as (scanner)
-         (parse-list parse-a scanner :separator #\,)))
+         (parse-list parse-a scanner :separator #\,))
+
+       (parse-repeating-list-of-as (scanner)
+         (parse-list parse-a scanner :start-delimiter #\[ :separator #\, :end-delimiter #\] :can-repeat t))
+
+       (parse-delimited-list-of-as (scanner)
+         (parse-list parse-a scanner :start-delimiter #\( :separator #\, :end-delimiter #\))))
    
     (setf (get 'parse-a :diagnostic-type) (make-instance 'diagnostic-type :code 80000 :name "a"))
 
@@ -374,7 +411,28 @@
       (test-parser parse-comma-separated-as "a, a, a]"
         :is-match-p t
         :expected-type 'ast-list
-        :end-position 7))))
+        :end-position 7))
+
+    (with-test-name test-repeating-list
+      (test-parser parse-repeating-list-of-as " [ a, a ] [ a ]"
+        :is-match-p t
+        :expected-type 'ast-list))
+
+    (with-test-name test-empty-list
+      (test-parser parse-delimited-list-of-as " ()"
+        :is-match-p t
+        :expected-type 'ast-list))
+
+    (with-test-name test-empty-list-with-repeat
+      (test-parser parse-repeating-list-of-as " []"
+        :is-match-p t
+        :expected-type 'ast-list))))
+
+    ;;////TODO: does not work yet
+    ;(with-test-name test-trailing-separators
+      ;(test-parser parse-comma-separated-as "a, a,"
+        ;:is-match-p t
+        ;:expected-type 'ast-list))))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-modifier (scanner)
@@ -525,12 +583,65 @@
 
 ;; -----------------------------------------------------------------------------
 (defun parse-attribute (scanner)
-  (declare (ignore scanner))
-  (parse-result-no-match));////TODO
+  (let ((saved-position (get-position scanner))
+        (name-result nil)
+        (arguments-result nil))
+    (parse-whitespace scanner)
+    (setf name-result (parse-identifier scanner))
+    (if (parse-result-no-match-p name-result)
+      (parse-result-no-match)
+      (progn
+        (parse-whitespace scanner)
+        (setf arguments-result (parse-list parse-expression scanner :start-delimiter #\( :separator #\, :end-delimiter #\)))
+        (parse-result-match (make-instance 'ast-attribute
+                                           :source-region (make-source-region saved-position scanner)
+                                           :name (parse-result-value name-result)
+                                           :arguments (if (parse-result-match-p arguments-result)
+                                                          (parse-result-value arguments-result))))))))
+
+(deftest test-parse-single-identifier-attribute ()
+  (test-parser parse-attribute "test"
+               :end-position 4 :is-match-p t :expected-type 'ast-attribute
+               :checks ((test-equal "test" (identifier-to-string (get-identifier ast)))
+                        (test-equal nil (get-arguments ast)))))
+
+(deftest test-parse-attribute-with-arguments ()
+  (test-parser parse-attribute "test(1,2)"
+               :end-position 9 :is-match-p t :expected-type 'ast-attribute
+               :checks ((test-equal "test" (identifier-to-string (get-identifier ast)))
+                        (test-equal 2 (length (get-list (get-arguments ast)))))))
+
+(deftest test-parse-attribute ()
+  (test-parse-single-identifier-attribute)
+  (test-parse-attribute-with-arguments))
 
 ;; -----------------------------------------------------------------------------
+;;////TODO: need to parse attribute lists like [ Foo ] [ Bar ]
 (defun parse-attribute-list (scanner)
-  (parse-list parse-attribute scanner :start-delimiter #\[ :separator #\, :end-delimiter #\]))
+  (parse-list parse-attribute scanner :start-delimiter #\[ :end-delimiter #\] :can-repeat t))
+
+(deftest test-parse-empty-attribute-list ()
+  (test-parser parse-attribute-list " [] "
+               :is-match-p t
+               :expected-type 'ast-list
+               :checks ((test-equal 0 (length (get-list ast))))))
+
+(deftest test-parse-attribute-list-with-multiple-attributes ()
+  (test-parser parse-attribute-list " [ A B( 1 ) ]"
+               :is-match-p t
+               :expected-type 'ast-list
+               :checks ((test-equal 2 (length (get-list ast))))))
+
+(deftest test-parse-multi-attribute-list ()
+  (test-parser parse-attribute-list " [ A ] [ B( 1 ) ]"
+               :is-match-p t
+               :expected-type 'ast-list
+               :checks ((test-equal 2 (length (get-list ast))))))
+
+(deftest test-parse-attribute-list ()
+  (test-parse-empty-attribute-list)
+  (test-parse-attribute-list-with-multiple-attributes)
+  (test-parse-multi-attribute-list))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type (scanner)
@@ -802,7 +913,13 @@
     (parse-result-no-match)
     (let ((next-char (read-next-token scanner)))
       (if (equal next-char #\\)
-        (not-implemented "escape sequences")
+        (let ((next-next-char (read-next-token scanner)))
+          (parse-result-match
+            (cond
+              ((equal #\n next-next-char) #\linefeed)
+              ((equal #\r next-next-char) #\return)
+              ((equal #\t next-next-char) #\tab)
+              (t next-next-char))))
         (parse-result-match next-char)))))
 
 (deftest test-parse-character-simple ()
@@ -811,8 +928,27 @@
                :expected-type 'character
                :checks ((test-equal #\c ast))))
 
+(deftest test-parse-character-escape-sequences ()
+  (test-parser parse-character "\\n"
+               :is-match-p t
+               :expected-type 'character
+               :checks ((test-equal #\linefeed ast)))
+  (test-parser parse-character "\\r"
+               :is-match-p t
+               :expected-type 'character
+               :checks ((test-equal #\return ast)))
+  (test-parser parse-character "\\t"
+               :is-match-p t
+               :expected-type 'character
+               :checks ((test-equal #\tab ast)))
+  (test-parser parse-character "\\\\"
+               :is-match-p t
+               :expected-type 'character
+               :checks ((test-equal #\\ ast))))
+
 (deftest test-parse-character ()
-  (test-parse-character-simple))
+  (test-parse-character-simple)
+  (test-parse-character-escape-sequences))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-literal (scanner)
@@ -824,12 +960,16 @@
 
             ((equal next-char #\")
              (let ((buffer (make-array 64 :adjustable t :fill-pointer 0 :element-type 'character)))
-               (loop while (not (match-next-token scanner #\"))
-                     do
-                     (setf next-char (parse-character scanner))
-                     (if (parse-result-no-match-p next-char)
-                       (not-implemented "expecting character"))
-                     (vector-push-extend (parse-result-value next-char) buffer))
+               (loop
+                 (loop while (not (match-next-token scanner #\"))
+                       do
+                       (setf next-char (parse-character scanner))
+                       (if (parse-result-no-match-p next-char)
+                         (not-implemented "expecting character"))
+                       (vector-push-extend (parse-result-value next-char) buffer))
+                 (parse-whitespace scanner)
+                 (if (not (match-next-token scanner #\"))
+                   (return)))
                (parse-result-match
                  (make-instance 'ast-string-literal
                                :source-region (make-source-region saved-position scanner)
@@ -876,10 +1016,17 @@
                :expected-type 'ast-string-literal
                :checks ((test-equal "foo" (get-literal-value ast)))))
 
+(deftest test-parse-multi-string-literal ()
+  (test-parser parse-literal (format nil "\"foo\"~C\"bar\"" #\linefeed)
+               :is-match-p t
+               :expected-type 'ast-string-literal
+               :checks ((test-equal "foobar" (get-literal-value ast)))))
+
 (deftest test-parse-literal ()
   (test-parser parse-literal "" :is-match-p nil)
   (test-parse-literal-integer)
-  (test-parse-literal-string-simple))
+  (test-parse-literal-string-simple)
+  (test-parse-multi-string-literal))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-expression (scanner)
@@ -1197,6 +1344,7 @@
   (test-parse-modifier)
   (test-parse-modifier-list)
   (test-parse-identifier)
+  (test-parse-attribute)
   (test-parse-character)
   (test-parse-literal)
   (test-parse-type)

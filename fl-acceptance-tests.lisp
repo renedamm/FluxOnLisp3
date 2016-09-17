@@ -116,13 +116,17 @@
           (run-flux "
             program Test
             {
-                type String;
-                [ InternalCall ]
-                function Print : String -> ();
+                object Host;
+                function Write : ( Object, Object ) -> ();
 
                 function Main : () -> ()
                 {
-                    Print( \"Hello, World!\" );
+                    Runtime.Host.Console.Write( \"Hello, World!\" );
+
+                    // Equivalent to:
+                    Write( Runtime.Host.Console, \"Hello, World!\" );
+
+                    // Make both work
                 }
             }
            ")))

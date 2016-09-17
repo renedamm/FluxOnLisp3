@@ -16,7 +16,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defun run-flux (code &key program verb path argument host)
-  (with-new-program-state ()
+  (with-new-program-state (:include-standard-libraries t)
     (with-new-parser-state ()
       (let* ((scanner (make-string-scanner code))
              (ast (parse-compilation-unit scanner)))

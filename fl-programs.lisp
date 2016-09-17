@@ -19,10 +19,12 @@
 ;;;;============================================================================
 
 ;; -----------------------------------------------------------------------------
-(defmacro with-new-program-state (() &body body)
+(defmacro with-new-program-state ((&key include-standard-libraries) &body body)
   `(let ((*programs* (make-hash-table :test #'equal))
          (*libraries* (make-hash-table :test #'equal))
          (*modules* (make-hash-table :test #'equal)))
+     (if ,include-standard-libraries
+       (load-standard-libraries))
      ,@body))
 
 ;;;;============================================================================
@@ -90,16 +92,28 @@
                  :function-name (canonicalize function-name)))
 
 ;; -----------------------------------------------------------------------------
-(defun fl-program (name &key body attributes ast)
+(defun fl-unit (name &key body attributes ast table unit-type)
   (let* ((canonical-name (canonicalize name))
-         (program (make-instance 'fl-program
-                                 :name canonical-name
-                                 :body body
-                                 :ast ast)))
-    (if (gethash canonical-name *programs*)
-      (not-implemented "error: program with same name already defined"))
-    (setf (gethash canonical-name *programs*) program)
-    program))
+         (unit (make-instance unit-type
+                              :name canonical-name
+                              :body body
+                              :ast ast)))
+    (if (gethash canonical-name table)
+      (not-implemented "error: unit with same name already defined"))
+    (setf (gethash canonical-name table) unit)
+    unit))
+
+;; -----------------------------------------------------------------------------
+(defun fl-module (name &key body attributes ast)
+  (fl-unit name :body body :attributes attributes :ast ast :table *modules* :unit-type 'fl-module))
+
+;; -----------------------------------------------------------------------------
+(defun fl-library (name &key body attributes ast)
+  (fl-unit name :body body :attributes attributes :ast ast :table *libraries* :unit-type 'fl-library))
+
+;; -----------------------------------------------------------------------------
+(defun fl-program (name &key body attributes ast)
+  (fl-unit name :body body :attributes attributes :ast ast :table *programs* :unit-type 'fl-program))
 
 (deftest test-fl-program-adds-program-to-state ()
   (with-new-program-state ()
