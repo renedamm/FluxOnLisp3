@@ -129,7 +129,18 @@
                  :base base-type))
 
 ;; -----------------------------------------------------------------------------
+(defun fl-tuple-type (left-type right-type &key ast)
+  (assert left-type)
+  (assert right-type)
+  (make-instance 'fl-tuple-type
+                 :left left-type
+                 :right right-type
+                 :ast ast))
+
+;; -----------------------------------------------------------------------------
 (defun fl-function-type (argument-type result-type)
+  (assert argument-type)
+  (assert result-type)
   (make-instance 'fl-function-type
                  :left argument-type
                  :right result-type))

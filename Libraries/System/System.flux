@@ -19,5 +19,12 @@
 library System
 {
 	import module System::Object;
+
+
+	//Write( "Hello, World" ).To( Runtime.Host.Console );
+	//Write( value ).Into( somewhere );
+
+	//TEMP
+    function Write : ( Object, Object ) -> ();
 }
 

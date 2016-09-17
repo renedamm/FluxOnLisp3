@@ -646,12 +646,27 @@
 ;; -----------------------------------------------------------------------------
 (defun parse-type (scanner)
   (let* ((saved-position (get-position scanner))
-         (left-type (cond ((match-next-token scanner #\()
-                           (parse-whitespace scanner)
-                           (if (match-next-token scanner #\))
-                               (parse-result-match (make-instance 'ast-nothing-type
-                                                                 :source-region (make-source-region saved-position scanner)))
-                               (not-implemented "parenthesized type expressions")))
+         (left-type (cond ((equal #\( (peek-next-token scanner))
+                           (let ((type-list
+                                   ;;////TODO: ellipsis at end
+                                   (parse-list parse-type scanner
+                                               :start-delimiter #\(
+                                               :separator #\,
+                                               :end-delimiter #\))))
+                             (if (parse-result-match-p type-list)
+                               (let* ((element-types (get-list (parse-result-value type-list)))
+                                      (num-element-types (length element-types))
+                                      (source-region (get-source-region type-list)))
+                                 (cond
+                                   ((eq 0 num-element-types)
+                                     (make-instance 'ast-nothing-type
+                                                    :source-region source-region))
+                                    ((eq 1 num-element-types)
+                                     (first element-types))
+                                    (t
+                                     (make-instance 'ast-tuple-type
+                                                    :source-region source-region
+                                                    :component-types element-types)))))))
                           (t
                            (let (modifiers name)
                              (setf modifiers (parse-modifier-list scanner))
@@ -701,11 +716,25 @@
                :checks ((test-type 'ast-named-type (get-left-type ast))
                         (test-type 'ast-named-type (get-right-type ast)))))
 
+(deftest test-parse-parenthesized-type ()
+  (test-parser parse-type "( Foobar )"
+               :is-match-p t
+               :expected-type 'ast-named-type))
+
+(deftest test-parse-tuple-type ()
+  (test-parser parse-type "( Foobar, Barfoo )"
+               :is-match-p t
+               :expected-type 'ast-tuple-type
+               :checks ((test-type 'ast-named-type (first (get-component-types ast)))
+                        (test-type 'ast-named-type (second (get-component-types ast))))))
+
 (deftest test-parse-type ()
   (test-parse-simple-named-type)
   (test-parse-nothing-type)
   (test-parse-simple-function-type)
-  (test-parse-simple-union-type))
+  (test-parse-simple-union-type)
+  (test-parse-parenthesized-type)
+  (test-parse-tuple-type))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-parameter (scanner)

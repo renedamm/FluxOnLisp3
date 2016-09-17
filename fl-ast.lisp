@@ -292,6 +292,14 @@
   ())
 
 ;; -----------------------------------------------------------------------------
+;; Normally a combination type but in the AST it's represented as a straight
+;; list of type. Length of list is always >= 2.
+(defclass ast-tuple-type (ast-type)
+  ((component-types
+    :reader get-component-types
+    :initarg :component-types)))
+
+;; -----------------------------------------------------------------------------
 (defclass ast-definition (ast-node)
   ((attributes
      :reader get-attributes

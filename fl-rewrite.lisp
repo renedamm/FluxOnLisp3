@@ -32,6 +32,18 @@
                  :ast ast))
 
 ;; -----------------------------------------------------------------------------
+(defmethod rewrite ((ast ast-tuple-type))
+  (let ((component-types (mapcar #'rewrite (get-component-types ast))))
+    (labels ((recursive-construct-from (rest)
+               (let ((num-left (length rest))) ;;////FIXME: horribly inefficient
+                 (cond
+                   ((eq 2 num-left)
+                    (fl-tuple-type (first rest) (second rest)))
+                   (t
+                    (fl-tuple-type (first rest) (recursive-construct-from (cdr rest))))))))
+      (recursive-construct-from component-types))))
+
+;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-function-type))
   (let ((left-type (rewrite (get-left-type ast)))
         (right-type (rewrite (get-right-type ast))))
