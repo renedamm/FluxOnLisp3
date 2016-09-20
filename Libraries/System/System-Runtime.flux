@@ -16,23 +16,12 @@
 		   "WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE "
 		   "SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE." ) ]
 
-module System::Object
+module System::Runtime
 {
 	features Types
 	{
-		[ Description( "The toplevel type which all other types are based on." ) ]
-		abstract type Object;
-	}
-
-	features Methods
-	{
-		[ Description( "Convert the given v:Object to a value of the given type t:T." ) ]
-		[ Note( "A conversion with a matching signature must be defined or a compile-time error will result." ) ]
-		[ Example( () =>
-			// Evaluates to "1".
-			1.To< String > ) ]
-		[ Tag( "Conversion" ) ]
-		abstract method To< T : Object >( Object ) : T;
+        [ Description( "Object representing the language runtime." ) ]
+		object Runtime;
 	}
 }
 

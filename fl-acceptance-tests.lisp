@@ -111,6 +111,14 @@
     (test-equal (canonicalize "Test") (get-name result))))
 
 ;; -----------------------------------------------------------------------------
+(deftest test-can-use-function-from-stdlib ()
+  ())
+
+;; -----------------------------------------------------------------------------
+(deftest test-can-use-type-from-stdlib ()
+  ())
+
+;; -----------------------------------------------------------------------------
 (deftest test-can-execute-hello-world-program ()
   (let ((result
           (run-flux "

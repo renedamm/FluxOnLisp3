@@ -19,9 +19,11 @@
 library System
 {
 	import module System::Object;
+	import module System::Runtime;
+	import module System::Runtime::Host;
 
 
-	//Write( "Hello, World" ).To( Runtime.Host.Console );
+	//Write( "Hello, World" ).IntoStream( Runtime.Host.Console ); == To( Write( "Hello, World" ), Runtime.Host.Console )
 	//Write( value ).Into( somewhere );
 
 	//TEMP

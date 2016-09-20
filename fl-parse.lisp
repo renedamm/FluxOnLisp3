@@ -34,6 +34,9 @@
 ;; a prefix matches their expected pattern, they will produce a match.
 ;; They will, however, go for the longest possible prefix they can
 ;; match.
+;;
+;; Lookahead is possible to do with the approach here but for simplicity,
+;; parsers should at this point prefer brute-force and backtracking.
 
 ;;;;============================================================================
 ;;;;    Globals.
@@ -737,17 +740,7 @@
   (test-parse-tuple-type))
 
 ;; -----------------------------------------------------------------------------
-(defun parse-type-parameter (scanner)
-  (declare (ignore scanner))
-  (parse-result-no-match));////TODO
-
-;; -----------------------------------------------------------------------------
-(defun parse-type-parameter-list (scanner)
-  "Parse a list of type parameters surrounded by '<' and '>'."
-  (parse-list parse-type-parameter scanner :start-delimiter #\< :separator #\, :end-delimiter #\>))
-
-;; -----------------------------------------------------------------------------
-(defun parse-value-parameter (scanner)
+(defun parse-parameter (scanner syntax-type)
   (let* ((start-position (get-position scanner))
          attributes modifiers identifier type value)
     
@@ -780,24 +773,51 @@
              (parse-result-no-match-p type))
       (progn
         (set-position start-position scanner)
-        (return-from parse-value-parameter (parse-result-no-match))))
+        (return-from parse-parameter (parse-result-no-match))))
 
     ;; Parse value.
     (parse-whitespace scanner)
     (if (match-next-token scanner #\=)
       (progn
         (parse-whitespace scanner)
-        (setf value (parse-expression scanner))))
+        (setf value (cond
+                     ((eq 'ast-value-parameter-definition syntax-type)
+                      (parse-expression scanner))
+                     ((eq 'ast-type-parameter-definition syntax-type)
+                      (parse-type scanner))
+                     (t
+                      (not-implemented "unrecognized parameter syntax type"))))))
     
     ;;////TODO: deal with parse error
     (parse-result-value
-      (make-instance 'ast-value-parameter-definition
-                    :source-region (make-source-region start-position scanner)
-                    :attributes attributes
-                    :modifiers (parse-result-match-value-or modifiers nil)
-                    :name (parse-result-match-value-or identifier nil)
-                    :type type
-                    :value value))))
+      (make-instance syntax-type
+                     :source-region (make-source-region start-position scanner)
+                     :attributes attributes
+                     :modifiers (parse-result-match-value-or modifiers nil)
+                     :name (parse-result-match-value-or identifier nil)
+                     :type type
+                     :value value))))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type-parameter (scanner)
+  (parse-parameter scanner 'ast-type-parameter-definition))
+
+(deftest test-parse-simple-named-type-parameter ()
+  (test-parser parse-type-parameter "Object"
+               :is-match-p t
+               :expected-type 'ast-type-parameter-definition))
+
+(deftest test-parse-type-parameter ()
+  (test-parse-simple-named-type-parameter))
+
+;; -----------------------------------------------------------------------------
+(defun parse-type-parameter-list (scanner)
+  "Parse a list of type parameters surrounded by '<' and '>'."
+  (parse-list parse-type-parameter scanner :start-delimiter #\< :separator #\, :end-delimiter #\>))
+
+;; -----------------------------------------------------------------------------
+(defun parse-value-parameter (scanner)
+  (parse-parameter scanner 'ast-value-parameter-definition))
 
 (deftest test-parse-value-parameter-simple ()
   (test-parser parse-value-parameter "Foo : Integer"
@@ -926,7 +946,7 @@
 
 ;; -----------------------------------------------------------------------------
 (defun parse-type-argument-list (scanner)
-  (parse-list parse-type-argument scanner :start-delimiter #\{ :end-delimiter #\} :separator #\,))
+  (parse-list parse-type-argument scanner :start-delimiter #\< :end-delimiter #\> :separator #\,))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-value-argument (scanner)
@@ -1058,6 +1078,55 @@
   (test-parse-multi-string-literal))
 
 ;; -----------------------------------------------------------------------------
+(defun try-parse-lambda-expression (scanner)
+  (let ((saved-position (get-position scanner))
+         value-parameters
+         result-type
+         body)
+
+    (setf value-parameters
+      (if (equal #\( (peek-next-token scanner))
+          (parse-value-argument-list scanner)
+          (parse-identifier scanner)))
+
+    (if (parse-result-no-match-p value-parameters)
+      (return-from try-parse-lambda-expression (parse-result-no-match)))
+
+    (parse-whitespace scanner)
+
+    (if (match-next-token scanner #\:)
+      (progn
+        (setf result-type (parse-type scanner))
+        (if (parse-result-no-match-p result-type)
+          (not-implemented "error: expecting type"))))
+
+    (if (not (match-token-sequence scanner "=>"))
+      (if (not result-type)
+        (progn
+          ;; We didn't see a result type so the parse on the (...) part is ambiguous.
+          ;; So, no match.
+          (set-position saved-position scanner)
+          (return-from try-parse-lambda-expression (parse-result-no-match)))
+        (not-implemented "error: expecting '=>'")))
+
+    (parse-whitespace scanner)
+
+    (setf body
+      (if (equal #\{ (peek-next-token scanner))
+        (parse-statement-list scanner)
+        (parse-expression scanner)))
+
+    (if (parse-result-no-match-p body)
+      (not-implemented "errir: expecting expression or statement list as lambda body"))
+
+    (parse-result-match
+      (make-instance 'ast-lambda-expression
+                     :source-region (make-source-region saved-position (get-position scanner))
+                     :value-parameters value-parameters
+                     :result-type result-type
+                     :body body))))
+
+;; -----------------------------------------------------------------------------
 (defun parse-expression (scanner)
   (if (is-at-end-p scanner)
       (return-from parse-expression (parse-result-no-match)))
@@ -1072,16 +1141,39 @@
     (let ((next-char (peek-next-token scanner)))
       (setf expression (cond
 
+                         ;; Parse list expression.
+                         ((equal #\( next-char)
+                          (let ((lambda-parse (try-parse-lambda-expression scanner)))
+                            (if (parse-result-match-p lambda-parse)
+                              lambda-parse
+                              (let ((list-parse (parse-list parse-expression scanner :start-delimiter #\( :separator #\, :end-delimiter #\))))
+                                (if (parse-result-no-match-p list-parse)
+                                    list-parse
+                                    (let* ((expressions (get-list list-parse))
+                                           (num-expressions (length expressions)))
+                                      (cond
+                                        ((eq 1 num-expressions)
+                                         (first expressions))
+                                        ((eq 0 num-expressions)
+                                         (parse-result-match
+                                           (make-instance 'ast-nothing-expression
+                                                          :source-region (get-source-region list-parse))))
+                                        (t
+                                         (not-implemented "foo")))))))))
+
                          ;; Parse name expression.
                          ((or (alpha-char-p next-char)
                               (equal #\_ next-char))
-                          (let ((id (parse-identifier scanner)))
-                            (if (not (parse-result-match-p id))
-                              (not-implemented "expecting name"))
-                            (parse-result-match
-                              (make-instance 'ast-name-expression
-                                            :source-region (make-source-region start-pos scanner)
-                                            :name (parse-result-value id)))))
+                          (let ((lambda-parse (try-parse-lambda-expression scanner)))
+                            (if (parse-result-match-p lambda-parse)
+                              lambda-parse
+                              (let ((id (parse-identifier scanner)))
+                                (if (not (parse-result-match-p id))
+                                  (not-implemented "expecting name"))
+                                (parse-result-match
+                                  (make-instance 'ast-name-expression
+                                                :source-region (make-source-region start-pos scanner)
+                                                :name (parse-result-value id)))))))
 
                          ;; Parse literal.
                          ((or (digit-char-p next-char)
@@ -1103,17 +1195,17 @@
                ;; Parse call expression.
                ((or (equal #\( next-char)
                     (equal #\< next-char))
-                (let ((type-arguments (if (equal #\< next-char)
-                                        (progn
-                                          (parse-type-argument-list scanner)
-                                          (parse-whitespace scanner)
-                                          (if (not (is-at-end-p scanner))
-                                            (setf next-char (peek-next-token scanner))
-                                            (setf next-char nil)))
-                                        nil))
-                      (value-arguments (if (equal #\( next-char)
-                                         (parse-value-argument-list scanner)
-                                         nil)))
+                (let* ((type-arguments (if (equal #\< next-char)
+                                         (progn
+                                           (parse-type-argument-list scanner)
+                                           (parse-whitespace scanner)
+                                           (if (not (is-at-end-p scanner))
+                                             (setf next-char (peek-next-token scanner))
+                                             (setf next-char nil)))
+                                         nil))
+                       (value-arguments (if (equal #\( next-char)
+                                          (parse-value-argument-list scanner)
+                                          nil)))
                   (setf expression
                         (parse-result-value
                           (make-instance 'ast-call-expression
@@ -1174,11 +1266,32 @@
                         (test-same nil (get-type-arguments ast))
                         (test-equal 0 (length (get-list (get-value-arguments ast)))))))
 
+(deftest test-parse-nothing-expression ()
+  (test-parser parse-expression "()"
+               :is-match-p t
+               :expected-type 'ast-nothing-expression))
+
+(deftest test-parse-simple-parenthesized-expression ()
+  (test-parser parse-expression "(1)"
+               :is-match-p t
+               :expected-type 'ast-literal-expression))
+
+(deftest test-parse-simple-lambda-expression ()
+  (test-parser parse-expression "() => 2"
+               :is-match-p t
+               :expected-type 'ast-lambda-expression
+               :checks ((test-equal nil (get-result-type ast))
+                        (test-type 'ast-list (get-value-parameters ast))
+                        (test-type 'ast-literal-expression (get-body ast)))))
+
 (deftest test-parse-expression ()
   (test-parse-expression-literal)
   (test-parse-expression-dot-simple)
   (test-parse-expression-dot-multiple)
-  (test-parse-expression-call-simple))
+  (test-parse-expression-call-simple)
+  (test-parse-nothing-expression)
+  (test-parse-simple-parenthesized-expression)
+  (test-parse-simple-lambda-expression))
 
 ;; -----------------------------------------------------------------------------
 (defun parse-definition (scanner)
@@ -1377,6 +1490,7 @@
   (test-parse-character)
   (test-parse-literal)
   (test-parse-type)
+  (test-parse-type-parameter)
   (test-parse-expression)
   (test-parse-statement)
   (test-parse-statement-list)

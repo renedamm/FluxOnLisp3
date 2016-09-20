@@ -191,6 +191,10 @@
      :initarg :name)))
 
 ;; -----------------------------------------------------------------------------
+(defclass ast-nothing-expression (ast-expression)
+  ())
+
+;; -----------------------------------------------------------------------------
 (defclass ast-literal-expression (ast-expression)
   ((value
      :reader get-literal-value
@@ -248,6 +252,18 @@
    (value-arguments
      :reader get-value-arguments
      :initarg :value-arguments)))
+
+;; -----------------------------------------------------------------------------
+(defclass ast-lambda-expression (ast-expression)
+  ((value-parameters
+    :reader get-value-parameters
+    :initarg :value-parameters)
+   (result-type
+    :reader get-result-type
+    :initarg :result-type)
+   (body
+    :reader get-body
+    :initarg :body)))
 
 ;; -----------------------------------------------------------------------------
 (defclass ast-type (ast-node)
@@ -342,11 +358,11 @@
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-field-definition (ast-function-definition)
+(defclass ast-field-definition (ast-definition)
   ())
 
 ;; -----------------------------------------------------------------------------
-(defclass ast-method-definition (ast-function-definition)
+(defclass ast-method-definition (ast-definition)
   ())
 
 ;; -----------------------------------------------------------------------------

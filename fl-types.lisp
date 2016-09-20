@@ -138,6 +138,21 @@
                  :ast ast))
 
 ;; -----------------------------------------------------------------------------
+(defun fl-tuple-type-from-list-of-types (types)
+  (case (length types)
+    (0 *nothing-type*)
+    (1 (first types))
+    (otherwise
+      (labels ((recursive-construct-from (rest)
+                 (let ((num-left (length rest))) ;;////FIXME: horribly inefficient
+                   (cond
+                     ((eq 2 num-left)
+                      (fl-tuple-type (first rest) (second rest)))
+                     (t
+                      (fl-tuple-type (first rest) (recursive-construct-from (cdr rest))))))))
+        (recursive-construct-from types)))))
+  
+;; -----------------------------------------------------------------------------
 (defun fl-function-type (argument-type result-type)
   (assert argument-type)
   (assert result-type)

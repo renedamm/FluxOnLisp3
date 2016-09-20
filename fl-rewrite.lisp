@@ -34,14 +34,7 @@
 ;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-tuple-type))
   (let ((component-types (mapcar #'rewrite (get-component-types ast))))
-    (labels ((recursive-construct-from (rest)
-               (let ((num-left (length rest))) ;;////FIXME: horribly inefficient
-                 (cond
-                   ((eq 2 num-left)
-                    (fl-tuple-type (first rest) (second rest)))
-                   (t
-                    (fl-tuple-type (first rest) (recursive-construct-from (cdr rest))))))))
-      (recursive-construct-from component-types))))
+    (fl-tuple-type-from-list-of-types component-types)))
 
 ;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-function-type))
@@ -87,10 +80,45 @@
 ;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-function-definition))
   (fl-function (identifier-to-string (get-identifier ast))
-               :type (rewrite (get-type ast))
+               :type (rewrite (get-type ast)) ;;////TODO: need to capture names from tuples
                :ast ast
                :modifiers (rewrite-modifiers ast)
                :body (rewrite-body ast)))
+
+;; -----------------------------------------------------------------------------
+(defmethod rewrite ((ast ast-field-definition))
+  (let* ((modifiers (rewrite-modifiers ast))
+         (name (identifier-to-string (get-identifier ast)))
+         (body (get-value ast))
+         ;;////TODO: need to check form of value parameters
+         (object-type (rewrite (get-type (first (get-list (get-value-parameters ast))))))
+         (value-type (rewrite (get-type ast)))
+         (default-type (fl-function-type object-type value-type))
+         (reader-type default-type)
+         (writer-type (fl-function-type (fl-tuple-type object-type value-type) *nothing-type*))
+         definitions)
+    ;;////TODO: check which actually apply to the field
+    (setf definitions (list (fl-function name :ast ast :modifiers (list 'default modifiers) :type default-type :body body) definitions))
+    (setf definitions (list (fl-function name :ast ast :modifiers (list 'read modifiers) :type reader-type :body body) definitions))
+    (setf definitions (list (fl-function name :ast ast :modifiers (list 'write modifiers) :type writer-type :body body) definitions))
+    (values-list definitions)))
+
+;; -----------------------------------------------------------------------------
+(defmethod rewrite ((ast ast-method-definition))
+  (let* ((value-parameters (get-list (get-value-parameters ast)))
+         (value-parameter-types
+           (mapcar (lambda (parameter)
+                     (rewrite (get-type parameter)))
+                   value-parameters))
+         (argument-type (fl-tuple-type-from-list-of-types value-parameter-types))
+         (result-type (rewrite (get-type ast))))
+
+    ;;////TODO: type parameters
+    (fl-function (identifier-to-string (get-identifier ast))
+                 :type (fl-function-type argument-type  result-type)
+                 :ast ast
+                 :modifiers (rewrite-modifiers ast)
+                 :body (rewrite-body ast))))
 
 ;; -----------------------------------------------------------------------------
 (defmethod rewrite ((ast ast-features-definition))
